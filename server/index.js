@@ -235,10 +235,63 @@ app.get('/api/analyses/:id/report.md', (req, res) => {
 
 /* ---------------- 静态资源 ---------------- */
 
-app.use(express.static(config.publicDir, { extensions: ['html'], maxAge: '1h' }));
+/**
+ * 资源版本号：取 public 下文件的最大 mtime。
+ * 改了前端文件，引用 URL 就变，浏览器不会继续用旧的 app.js（这是本地开发最常见的坑）。
+ */
+function assetVersion() {
+  let latest = 0;
+  try {
+    for (const f of fs.readdirSync(config.publicDir)) {
+      if (f === 'index.html' || f === 'favicon.svg') continue;
+      const st = fs.statSync(path.join(config.publicDir, f));
+      if (st.isFile() && st.mtimeMs > latest) latest = st.mtimeMs;
+    }
+  } catch {
+    /* 读不到就用 0 */
+  }
+  return Math.round(latest).toString(36);
+}
+
+let indexCache = { stamp: 0, html: '' };
+
+/** 入口 HTML：注入 ?v= 版本号，并禁止缓存 */
+function renderIndex() {
+  const file = path.join(config.publicDir, 'index.html');
+  const stamp = fs.statSync(file).mtimeMs;
+  if (indexCache.stamp !== stamp) {
+    const v = assetVersion();
+    indexCache = {
+      stamp,
+      html: fs
+        .readFileSync(file, 'utf8')
+        .replace('/styles.css', `/styles.css?v=${v}`)
+        .replace('/app.js', `/app.js?v=${v}`),
+    };
+  }
+  return indexCache.html;
+}
+
+app.get(['/', '/index.html'], (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.type('html').send(renderIndex());
+});
+
+app.use(
+  express.static(config.publicDir, {
+    index: false,
+    maxAge: '1h',
+    setHeaders: (res, filePath) => {
+      // 没有版本号兜底的 HTML 一律不缓存
+      if (/\.html?$/i.test(filePath)) res.setHeader('Cache-Control', 'no-store');
+    },
+  }),
+);
+
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api/')) return next();
-  res.sendFile(path.join(config.publicDir, 'index.html'));
+  res.setHeader('Cache-Control', 'no-store');
+  res.type('html').send(renderIndex());
 });
 
 /* ---------------- 错误处理 ---------------- */

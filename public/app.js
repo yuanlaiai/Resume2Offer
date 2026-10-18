@@ -21,6 +21,10 @@ const state = {
   depth: localStorage.getItem('if-depth') || 'standard',
   prefill: null,
   prefillBusy: false,
+  prefillQueued: false,
+  roleTouched: false,
+  autoStart: localStorage.getItem('if-autostart') !== '0',
+  autoTimer: null,
   reportDepth: localStorage.getItem('if-depth') || 'standard',
   historyOpen: false,
 };
@@ -290,6 +294,10 @@ function renderHome() {
 
         <div class="upload-actions">
           <button class="btn btn-brand btn-lg btn-block" id="submit-btn" type="submit">生成知识点与复习方案</button>
+          <label class="auto-start">
+            <input type="checkbox" id="auto-start" ${state.autoStart ? 'checked' : ''} />
+            <span>上传后自动开始分析（识别完岗位就拆简历）</span>
+          </label>
           <button class="btn btn-quiet btn-sm" type="button" id="sample-btn">没有简历？用示例简历试一下</button>
         </div>
         <div class="upload-foot">${notReady ? '⚠️ 服务端未配置 LLM_API_KEY，请参考 README 配置后重启，或用 npm run demo 启动' : '分析通常需要 20~40 秒，建议在电脑上操作'}</div>
@@ -328,7 +336,7 @@ function bindHome() {
       let timer = null;
       ta.addEventListener('input', () => {
         clearTimeout(timer);
-        timer = setTimeout(() => requestPrefill(), 1200);
+        timer = setTimeout(() => requestPrefill({ auto: false }), 1200);
       });
     } else {
       body.innerHTML = `
@@ -368,6 +376,26 @@ function bindHome() {
   });
 
   document.getElementById('upload-form').addEventListener('submit', submitAnalyze);
+
+  const auto = document.getElementById('auto-start');
+  if (auto) {
+    auto.checked = state.autoStart;
+    auto.addEventListener('change', () => {
+      state.autoStart = auto.checked;
+      localStorage.setItem('if-autostart', auto.checked ? '1' : '0');
+      if (!auto.checked) cancelAutoAnalyze();
+      else if (state.prefill) scheduleAutoAnalyze();
+    });
+  }
+
+  const roleInput = document.getElementById('role');
+  if (roleInput) {
+    // 用户手动改过岗位，就不再被自动识别覆盖
+    roleInput.addEventListener('input', () => {
+      state.roleTouched = true;
+      cancelAutoAnalyze();
+    });
+  }
 }
 
 function bindDropzone() {
@@ -399,6 +427,8 @@ function setFile(file) {
   }
   state.file = file;
   state.prefill = null;
+  state.roleTouched = false;
+  cancelAutoAnalyze();
   const chip = document.getElementById('file-chip');
   if (chip) {
     chip.innerHTML = `<div class="file-chip">
@@ -419,9 +449,21 @@ function setFile(file) {
 
 /* ---------- 上传即识别岗位 ---------- */
 
-async function requestPrefill() {
-  if (state.prefillBusy) return;
-  if (!state.health?.ready) return;
+/**
+ * 请求岗位预判。
+ * - 正在识别时再次触发，会记为「待补一次」，避免上传后的识别被丢掉
+ * - 失败时给出可见提示（之前是静默吞掉，用户只会觉得「没反应」）
+ * - 识别成功后若开启自动开始，倒计时 3 秒自动拆简历
+ */
+async function requestPrefill({ auto = true } = {}) {
+  if (state.prefillBusy) {
+    state.prefillQueued = true;
+    return;
+  }
+  if (!state.health?.ready) {
+    setPrefillHint('服务端未就绪，无法自动识别岗位', 'warn');
+    return;
+  }
 
   const form = new FormData();
   if (state.mode === 'text') {
@@ -434,42 +476,70 @@ async function requestPrefill() {
   }
 
   state.prefillBusy = true;
-  const hint = document.getElementById('prefill-hint');
-  if (hint) hint.textContent = '识别中…';
+  setPrefillHint('识别中…', 'busy');
+
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 45000);
   try {
-    const res = await fetch('/api/prefill', { method: 'POST', body: form });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || '识别失败');
+    const res = await fetch('/api/prefill', { method: 'POST', body: form, signal: ac.signal });
+    if (!res.ok) {
+      const msg = (await res.json().catch(() => ({}))).error || `识别失败（HTTP ${res.status}）`;
+      throw new Error(msg);
+    }
     const data = await res.json();
     state.prefill = data;
     applyPrefill(data);
+    if (auto && state.autoStart) scheduleAutoAnalyze();
   } catch (err) {
-    if (hint) hint.textContent = '';
+    const msg = err.name === 'AbortError' ? '识别超时' : err.message;
+    setPrefillHint(`${msg}，可手动填写岗位`, 'warn');
+    toast(`岗位自动识别失败：${msg}`, 'err');
+    console.warn('[prefill]', err);
   } finally {
+    clearTimeout(timer);
     state.prefillBusy = false;
+    if (state.prefillQueued) {
+      state.prefillQueued = false;
+      requestPrefill({ auto });
+    }
   }
+}
+
+function setPrefillHint(text, tone = '') {
+  const hint = document.getElementById('prefill-hint');
+  if (!hint) return;
+  hint.className = `label-hint${tone ? ` ${tone}` : ''}`;
+  hint.textContent = text || '';
 }
 
 function applyPrefill(data) {
   const roles = data.roles || [];
-  if (!roles.length) return;
+  if (!roles.length) {
+    setPrefillHint('没识别出岗位，可手动填写', 'warn');
+    return;
+  }
   const input = document.getElementById('role');
   const level = document.getElementById('level');
-  const hint = document.getElementById('prefill-hint');
-  if (input && !input.value.trim()) input.value = roles[0].title;
+  // 用户填过就不覆盖，否则用识别结果填充
+  if (input && (!input.value.trim() || !state.roleTouched)) input.value = roles[0].title;
   if (level && !level.value && (data.level || roles[0].level)) {
     const lv = data.level || roles[0].level;
     if ([...level.options].some((o) => o.value === lv)) level.value = lv;
   }
-  if (hint) hint.textContent = '✓ 已自动识别，可修改';
+  setPrefillHint('✓ 已自动识别，可修改', 'ok');
 
   const box = document.getElementById('role-suggest');
   if (!box) return;
   box.innerHTML = `
     <div class="suggest-title">AI 识别：${esc(data.headline || '')}</div>
     <div class="chips">
-      ${roles.map((r, i) => `<button type="button" class="chip pick ${i === 0 ? 'brand' : ''}" data-pick="${esc(r.title)}" data-level="${esc(r.level || '')}" title="${esc(r.reason)}">
+      ${roles
+        .map(
+          (r, i) => `<button type="button" class="chip pick ${i === 0 ? 'brand' : ''}" data-pick="${esc(r.title)}" data-level="${esc(r.level || '')}" title="${esc(r.reason)}">
         ${esc(r.title)}${r.fitScore ? `<span class="fit">${r.fitScore}</span>` : ''}
-      </button>`).join('')}
+      </button>`,
+        )
+        .join('')}
     </div>
     ${(data.keywords || []).length ? `<div class="suggest-kw">${data.keywords.map((k) => `<span>${esc(k)}</span>`).join('')}</div>` : ''}`;
 
@@ -477,12 +547,62 @@ function applyPrefill(data) {
     btn.addEventListener('click', () => {
       const roleInput = document.getElementById('role');
       if (roleInput) roleInput.value = btn.dataset.pick;
+      state.roleTouched = true;
       const lv = btn.dataset.level;
       const levelSel = document.getElementById('level');
       if (lv && levelSel && [...levelSel.options].some((o) => o.value === lv)) levelSel.value = lv;
       box.querySelectorAll('[data-pick]').forEach((b) => b.classList.toggle('brand', b === btn));
     });
   });
+}
+
+/** 识别完成后倒计时自动开始分析（3 秒内可取消） */
+function scheduleAutoAnalyze() {
+  if (state.autoTimer || state.submitting) return;
+  if (!state.autoStart || !state.prefill) return;
+  const form = document.getElementById('upload-form');
+  if (!form) return;
+
+  let left = 3;
+  const paint = () => {
+    const hint = document.getElementById('prefill-hint');
+    if (!hint) return;
+    hint.className = 'label-hint ok';
+    hint.innerHTML = `✓ 已识别，${left} 秒后自动拆简历 <button type="button" class="hint-cancel" id="cancel-auto">取消</button>`;
+    document.getElementById('cancel-auto')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelAutoAnalyze();
+      setPrefillHint('已取消自动开始，点下方按钮开始', 'ok');
+    });
+  };
+  paint();
+
+  state.autoTimer = setInterval(() => {
+    left -= 1;
+    if (left > 0) {
+      paint();
+      return;
+    }
+    cancelAutoAnalyze();
+    if (!state.submitting) form.requestSubmit();
+  }, 1000);
+}
+
+function cancelAutoAnalyze() {
+  if (state.autoTimer) {
+    clearInterval(state.autoTimer);
+    state.autoTimer = null;
+  }
+}
+
+/** 提交前等一等还没回来的识别结果，避免「岗位空着就分析」 */
+async function waitPrefill(timeoutMs = 10000) {
+  if (!state.prefillBusy && !state.prefillQueued) return;
+  const started = Date.now();
+  while ((state.prefillBusy || state.prefillQueued) && Date.now() - started < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 150));
+  }
 }
 
 async function submitAnalyze(e) {
@@ -493,20 +613,7 @@ async function submitAnalyze(e) {
     return;
   }
 
-  const role = (document.getElementById('role')?.value || '').trim();
-  const level = document.getElementById('level')?.value || '';
-  const form = new FormData();
-  form.append('targetRole', role);
-  form.append('level', level);
-
-  if (state.mode === 'text') {
-    const text = (document.getElementById('resume-text')?.value || '').trim();
-    if (text.length < 40) return toast('简历内容太短，至少 40 字', 'err');
-    form.append('text', text);
-  } else {
-    if (!state.file) return toast('请先选择简历文件', 'err');
-    form.append('resume', state.file);
-  }
+  cancelAutoAnalyze();
 
   state.submitting = true;
   const btn = document.getElementById('submit-btn');
@@ -516,6 +623,33 @@ async function submitAnalyze(e) {
   }
 
   try {
+    // 岗位识别可能还在路上：等它一下，别用空岗位去分析
+    if (!(document.getElementById('role')?.value || '').trim()) {
+      setPrefillHint('正在识别岗位，稍等…', 'busy');
+      await waitPrefill();
+    }
+
+    const role = (document.getElementById('role')?.value || '').trim();
+    const level = document.getElementById('level')?.value || '';
+    const form = new FormData();
+    form.append('targetRole', role);
+    form.append('level', level);
+
+    if (state.mode === 'text') {
+      const text = (document.getElementById('resume-text')?.value || '').trim();
+      if (text.length < 40) {
+        toast('简历内容太短，至少 40 字', 'err');
+        return;
+      }
+      form.append('text', text);
+    } else {
+      if (!state.file) {
+        toast('请先选择简历文件', 'err');
+        return;
+      }
+      form.append('resume', state.file);
+    }
+
     const result = await runJob(
       api('/api/analyze', { method: 'POST', body: form }),
       '正在读懂你的简历',
@@ -523,6 +657,7 @@ async function submitAnalyze(e) {
     );
     state.selected = new Set((result.topics || []).map((t) => t.id));
     state.pendingAuto = 5;
+    state.justAnalyzed = true;
     location.hash = `#/a/${result.analysisId}`;
   } catch (err) {
     /* 错误已在浮层展示 */
@@ -613,6 +748,11 @@ async function openAnalysis(id) {
     if (state.pendingMaterial) state.materialId = state.pendingMaterial;
     state.tab = defaultTab(record);
     if (state.pendingTab && TABS.some((t) => t.key === state.pendingTab)) state.tab = state.pendingTab;
+    // 刚分析完：先让用户看到简历被拆成了什么（画像页），资料在后台继续生成
+    if (state.justAnalyzed) {
+      state.tab = 'profile';
+      state.justAnalyzed = false;
+    }
     state.pendingTab = null;
     state.pendingMaterial = null;
     renderWorkspace();

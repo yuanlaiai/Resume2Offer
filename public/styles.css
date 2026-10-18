@@ -219,6 +219,12 @@ h1.hero-title em {
 }
 .mode-switch button.on { background: #fff; color: var(--text); box-shadow: 0 1px 3px rgba(10, 31, 28, 0.1); }
 .upload-actions { margin-top: 16px; display: grid; gap: 8px; }
+.auto-start {
+  display: flex; align-items: center; gap: 7px; justify-content: center;
+  font-size: 12px; color: var(--text-2); cursor: pointer; user-select: none;
+  padding: 2px 0;
+}
+.auto-start input { width: 14px; height: 14px; accent-color: var(--brand); cursor: pointer; }
 .upload-foot { margin-top: 12px; font-size: 11.5px; color: var(--muted); text-align: center; line-height: 1.6; }
 
 /* 流程条 */
@@ -706,6 +712,21 @@ h1.hero-title em {
    ============================================================ */
 
 .label-hint { font-size: 11.5px; font-weight: 500; color: var(--brand-deep); margin-left: 8px; }
+.label-hint.busy { color: var(--brand-deep); }
+.label-hint.busy::before {
+  content: ''; display: inline-block; width: 9px; height: 9px; margin-right: 5px;
+  border: 1.5px solid var(--brand); border-right-color: transparent; border-radius: 50%;
+  animation: hint-spin 0.7s linear infinite; vertical-align: -1px;
+}
+.label-hint.ok { color: #0f766e; }
+.label-hint.warn { color: #b45309; }
+.hint-cancel {
+  margin-left: 6px; padding: 1px 6px; font-size: 11px; cursor: pointer;
+  border: 1px solid var(--line-strong); background: #fff; border-radius: 6px;
+  color: var(--text-2); font-family: inherit;
+}
+.hint-cancel:hover { border-color: var(--brand-line); color: var(--brand-deep); }
+@keyframes hint-spin { to { transform: rotate(360deg); } }
 .role-suggest { margin-top: 10px; }
 .role-suggest:empty { display: none; }
 .suggest-title { font-size: 12px; color: var(--text-2); margin-bottom: 8px; }
