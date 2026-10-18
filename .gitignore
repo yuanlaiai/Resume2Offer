@@ -1,0 +1,14 @@
+# 依赖与产物
+node_modules/
+data/
+*.log
+npm-debug.log*
+
+# 环境变量（不要提交真实 Key）
+.env
+.env.local
+
+# 编辑器与系统
+.DS_Store
+.idea/
+.vscode/

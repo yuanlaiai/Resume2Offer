@@ -1,0 +1,14 @@
+services:
+  interview-forge:
+    build: .
+    ports:
+      - "8787:8787"
+    environment:
+      # 推荐用 .env 文件注入，也可直接在这里写
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+      - DEMO_MODE=${DEMO_MODE:-0}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

@@ -1,0 +1,33 @@
+{
+  "name": "interview-forge",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "简历驱动的 AI 面试复习教练：解析简历 → 知识点图谱 → 定制复习资料 → 出题测验 → 打分复盘 → 下一步推荐",
+  "keywords": [
+    "interview",
+    "resume",
+    "llm",
+    "ai",
+    "interview-preparation",
+    "career",
+    "openai-compatible"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "demo": "DEMO_MODE=1 node server/index.js",
+    "check": "node --check server/index.js && node --check server/pipeline.js && node --check public/app.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mammoth": "^1.9.0",
+    "multer": "^2.0.2",
+    "pdf-parse": "^1.1.1"
+  }
+}

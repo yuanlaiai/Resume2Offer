@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 语法检查
+        run: |
+          for f in server/*.js public/app.js scripts/e2e.mjs; do
+            node --check "$f"
+          done
+
+      - name: 启动演示模式
+        run: |
+          DEMO_MODE=1 PORT=8899 node server/index.js &
+          echo $! > server.pid
+          sleep 3
+
+      - name: 端到端测试（完整闭环）
+        run: BASE=http://127.0.0.1:8899 node scripts/e2e.mjs
+
+      - name: 停止服务
+        if: always()
+        run: |
+          [ -f server.pid ] && kill "$(cat server.pid)" || true
