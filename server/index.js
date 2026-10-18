@@ -1,6 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { config, llmReady, ROOT } from './config.js';
 import { store } from './store.js';
@@ -187,14 +188,69 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: err.message || '服务端出错' });
 });
 
-app.listen(config.port, config.host, () => {
+app.listen(config.port, config.host, async () => {
   const url = `http://localhost:${config.port}`;
   console.log('');
   console.log('  Interview Forge 已启动');
   console.log(`  → ${url}`);
+  const lan = lanIPv4();
+  if (lan && config.host === '0.0.0.0') {
+    console.log(`  → http://${lan}:${config.port}（同局域网/手机可访问）`);
+  }
   console.log(`  模型：${describeLLM().model}${config.demo ? '（演示模式，不消耗额度）' : ''}`);
   if (!llmReady()) {
     console.log('  ⚠️  未检测到 LLM_API_KEY，请复制 .env.example 为 .env 并填写，或用 npm run demo 体验');
   }
+
+  // 端口抢占自查：本机若已有别的程序（uvicorn、其他 dev server…）绑在 127.0.0.1 上，
+  // 访问 localhost 会打到它而不是我们，浏览器只会看到一个莫名其妙的 404。
+  const self = await probeSelf(config.port);
+  if (!self.ok) {
+    console.log('');
+    console.log(`  ⚠️  http://127.0.0.1:${config.port} 上响应的不是本服务：${self.detail}`);
+    console.log('      多半是另一个程序先占了这个端口的回环地址。查一下：');
+    console.log(`      lsof -nP -iTCP:${config.port} -sTCP:LISTEN`);
+    console.log(`      换端口启动：PORT=${config.port + 101} npm start`);
+    if (lan) console.log(`      或先用局域网地址访问：http://${lan}:${config.port}`);
+  }
   console.log('');
+}).on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error('');
+    console.error(`  ✖ 端口 ${config.port} 已被占用，换个端口再启动：PORT=${config.port + 101} npm start`);
+    console.error(`    查看占用者：lsof -nP -iTCP:${config.port} -sTCP:LISTEN`);
+    console.error('');
+  } else {
+    console.error('[server]', err);
+  }
+  process.exit(1);
 });
+
+/** 探测 127.0.0.1:port 上跑的到底是不是自己 */
+async function probeSelf(port) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/health`, {
+      signal: AbortSignal.timeout(1500),
+      headers: { 'cache-control': 'no-store' },
+    });
+    const text = await res.text();
+    try {
+      const body = JSON.parse(text);
+      if (body && body.version) return { ok: true };
+    } catch {
+      /* 非 JSON，继续判断 */
+    }
+    return { ok: false, detail: `HTTP ${res.status}，响应内容不是 Interview Forge` };
+  } catch (err) {
+    return { ok: false, detail: `探测失败：${err.message}` };
+  }
+}
+
+function lanIPv4() {
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const item of list || []) {
+      if (item.family === 'IPv4' && !item.internal) return item.address;
+    }
+  }
+  return '';
+}
