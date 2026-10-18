@@ -18,6 +18,18 @@ const state = {
   mode: 'file',
   file: null,
   submitting: false,
+  depth: localStorage.getItem('if-depth') || 'standard',
+  prefill: null,
+  prefillBusy: false,
+  reportDepth: localStorage.getItem('if-depth') || 'standard',
+  historyOpen: false,
+};
+
+const DEPTH_LABEL = { lite: '简单', standard: '中等', deep: '深度' };
+const DEPTH_DESC = {
+  lite: '只给结论与答题骨架，5 分钟能过一遍',
+  standard: '原理讲透到能应对一轮技术面',
+  deep: '讲到实现机制、对比选型与失效场景',
 };
 
 /* ---------------- 小工具 ---------------- */
@@ -253,8 +265,9 @@ function renderHome() {
         </div>
 
         <div class="field">
-          <label for="role">目标岗位</label>
-          <input class="input" id="role" name="targetRole" placeholder="例如：AI 应用开发工程师 / 高级后端 / 产品经理" maxlength="60" />
+          <label for="role">目标岗位<span class="label-hint" id="prefill-hint"></span></label>
+          <input class="input" id="role" name="targetRole" placeholder="上传简历后自动识别，也可以自己填" maxlength="60" />
+          <div class="role-suggest" id="role-suggest"></div>
         </div>
         <div class="field">
           <label for="level">目标级别（可选）</label>
@@ -266,6 +279,13 @@ function renderHome() {
             <option>专家</option>
             <option>管理岗</option>
           </select>
+        </div>
+
+        <div class="field">
+          <label>复习资料深度</label>
+          <div class="depth-switch" id="home-depth">
+            ${Object.entries(DEPTH_LABEL).map(([k, v]) => `<button type="button" data-depth="${k}" class="${state.depth === k ? 'on' : ''}"><b>${v}</b><span>${DEPTH_DESC[k]}</span></button>`).join('')}
+          </div>
         </div>
 
         <div class="upload-actions">
@@ -304,6 +324,12 @@ function bindHome() {
     const body = document.getElementById('upload-body');
     if (mode === 'text') {
       body.innerHTML = `<textarea class="textarea" id="resume-text" placeholder="把简历内容粘贴到这里（至少 40 字）…" style="min-height:180px"></textarea>`;
+      const ta = document.getElementById('resume-text');
+      let timer = null;
+      ta.addEventListener('input', () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => requestPrefill(), 1200);
+      });
     } else {
       body.innerHTML = `
         <div class="dropzone" id="dropzone">
@@ -321,13 +347,21 @@ function bindHome() {
 
   bindDropzone();
 
+  on('#home-depth [data-depth]', 'click', (e) => {
+    const d = e.currentTarget.dataset.depth;
+    state.depth = d;
+    state.reportDepth = d;
+    localStorage.setItem('if-depth', d);
+    document.querySelectorAll('#home-depth [data-depth]').forEach((b) => b.classList.toggle('on', b.dataset.depth === d));
+  });
+
   document.getElementById('sample-btn').addEventListener('click', async () => {
     try {
       const { text } = await api('/api/sample');
       document.querySelector('.mode-switch button[data-mode="text"]').click();
       document.getElementById('resume-text').value = text;
-      if (!document.getElementById('role').value) document.getElementById('role').value = 'AI 应用开发工程师';
-      toast('已填入示例简历，可以直接生成');
+      requestPrefill();
+      toast('已填入示例简历，正在识别岗位');
     } catch (err) {
       toast(err.message, 'err');
     }
@@ -364,6 +398,7 @@ function setFile(file) {
     return;
   }
   state.file = file;
+  state.prefill = null;
   const chip = document.getElementById('file-chip');
   if (chip) {
     chip.innerHTML = `<div class="file-chip">
@@ -379,6 +414,75 @@ function setFile(file) {
       if (input) input.value = '';
     });
   }
+  requestPrefill();
+}
+
+/* ---------- 上传即识别岗位 ---------- */
+
+async function requestPrefill() {
+  if (state.prefillBusy) return;
+  if (!state.health?.ready) return;
+
+  const form = new FormData();
+  if (state.mode === 'text') {
+    const text = (document.getElementById('resume-text')?.value || '').trim();
+    if (text.length < 60) return;
+    form.append('text', text);
+  } else {
+    if (!state.file) return;
+    form.append('resume', state.file);
+  }
+
+  state.prefillBusy = true;
+  const hint = document.getElementById('prefill-hint');
+  if (hint) hint.textContent = '识别中…';
+  try {
+    const res = await fetch('/api/prefill', { method: 'POST', body: form });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || '识别失败');
+    const data = await res.json();
+    state.prefill = data;
+    applyPrefill(data);
+  } catch (err) {
+    if (hint) hint.textContent = '';
+  } finally {
+    state.prefillBusy = false;
+  }
+}
+
+function applyPrefill(data) {
+  const roles = data.roles || [];
+  if (!roles.length) return;
+  const input = document.getElementById('role');
+  const level = document.getElementById('level');
+  const hint = document.getElementById('prefill-hint');
+  if (input && !input.value.trim()) input.value = roles[0].title;
+  if (level && !level.value && (data.level || roles[0].level)) {
+    const lv = data.level || roles[0].level;
+    if ([...level.options].some((o) => o.value === lv)) level.value = lv;
+  }
+  if (hint) hint.textContent = '✓ 已自动识别，可修改';
+
+  const box = document.getElementById('role-suggest');
+  if (!box) return;
+  box.innerHTML = `
+    <div class="suggest-title">AI 识别：${esc(data.headline || '')}</div>
+    <div class="chips">
+      ${roles.map((r, i) => `<button type="button" class="chip pick ${i === 0 ? 'brand' : ''}" data-pick="${esc(r.title)}" data-level="${esc(r.level || '')}" title="${esc(r.reason)}">
+        ${esc(r.title)}${r.fitScore ? `<span class="fit">${r.fitScore}</span>` : ''}
+      </button>`).join('')}
+    </div>
+    ${(data.keywords || []).length ? `<div class="suggest-kw">${data.keywords.map((k) => `<span>${esc(k)}</span>`).join('')}</div>` : ''}`;
+
+  box.querySelectorAll('[data-pick]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const roleInput = document.getElementById('role');
+      if (roleInput) roleInput.value = btn.dataset.pick;
+      const lv = btn.dataset.level;
+      const levelSel = document.getElementById('level');
+      if (lv && levelSel && [...levelSel.options].some((o) => o.value === lv)) levelSel.value = lv;
+      box.querySelectorAll('[data-pick]').forEach((b) => b.classList.toggle('brand', b === btn));
+    });
+  });
 }
 
 async function submitAnalyze(e) {
@@ -418,6 +522,7 @@ async function submitAnalyze(e) {
       ['读懂简历：拆解经历与技能', '推导知识点：按岗位重要性排序'],
     );
     state.selected = new Set((result.topics || []).map((t) => t.id));
+    state.pendingAuto = 5;
     location.hash = `#/a/${result.analysisId}`;
   } catch (err) {
     /* 错误已在浮层展示 */
@@ -486,8 +591,9 @@ async function deleteRecord(id) {
 
 const TABS = [
   { key: 'profile', label: '简历画像' },
-  { key: 'topics', label: '知识点' },
+  { key: 'topics', label: '知识点图谱' },
   { key: 'materials', label: '复习资料' },
+  { key: 'report', label: '面试报告' },
   { key: 'quiz', label: '测验' },
   { key: 'review', label: '复盘' },
   { key: 'plan', label: '计划' },
@@ -502,12 +608,21 @@ async function openAnalysis(id) {
     state.quizId = record.quizzes?.[record.quizzes.length - 1]?.id || null;
     state.attemptId = record.attempts?.[record.attempts.length - 1]?.id || null;
     state.materialId = record.materials?.find((m) => !m.error)?.topicId || record.topics?.[0]?.id || null;
+    state.viewVersion = 0;
+    state.historyOpen = false;
     if (state.pendingMaterial) state.materialId = state.pendingMaterial;
     state.tab = defaultTab(record);
     if (state.pendingTab && TABS.some((t) => t.key === state.pendingTab)) state.tab = state.pendingTab;
     state.pendingTab = null;
     state.pendingMaterial = null;
     renderWorkspace();
+    if (state.pendingAuto) {
+      const n = state.pendingAuto;
+      state.pendingAuto = 0;
+      if (!(record.materials || []).filter((m) => !m.error).length) {
+        setTimeout(() => generateTop(n), 300);
+      }
+    }
   } catch (err) {
     toast(err.message, 'err');
     location.hash = '#/';
@@ -579,6 +694,7 @@ function tabCount(key) {
   if (!r) return 0;
   if (key === 'topics') return (r.topics || []).length;
   if (key === 'materials') return (r.materials || []).filter((m) => !m.error).length;
+  if (key === 'report') return r.report ? 1 : 0;
   if (key === 'quiz') return (r.quizzes || []).length;
   if (key === 'review') return (r.attempts || []).length;
   return 0;
@@ -591,6 +707,7 @@ function renderPanel() {
     profile: panelProfile,
     topics: panelTopics,
     materials: panelMaterials,
+    report: panelReport,
     quiz: panelQuiz,
     review: panelReview,
     plan: panelPlan,
@@ -602,6 +719,7 @@ function renderPanel() {
   if (state.tab === 'profile') bindProfile();
   if (state.tab === 'topics') bindTopics();
   if (state.tab === 'materials') bindMaterials();
+  if (state.tab === 'report') bindReport();
   if (state.tab === 'quiz') bindQuiz();
   if (state.tab === 'review') bindReview();
   if (state.tab === 'plan') bindPlan();
@@ -614,13 +732,35 @@ function panelProfile() {
   const p = r.profile || {};
   const c = p.candidate || {};
   const skills = p.skills || [];
+  const exps = p.experiences || [];
+  const projs = p.projects || [];
 
   return `
-    <div class="card summary-card">
+    <div class="parse-strip">
+      <div class="ps-item"><b>${skills.length}</b><span>项技能</span></div>
+      <div class="ps-item"><b>${exps.length}</b><span>段经历</span></div>
+      <div class="ps-item"><b>${projs.length}</b><span>个项目</span></div>
+      <div class="ps-item"><b>${(p.risks || []).length}</b><span>个风险点</span></div>
+      <div class="ps-item"><b>${(r.topics || []).length}</b><span>个考点</span></div>
+      <div class="ps-item"><b>${(r.materials || []).filter((m) => !m.error).length}</b><span>篇资料</span></div>
+    </div>
+
+    <div class="card identity-card">
+      <div class="card-title">简历识别结果<span class="line"></span><span style="font-size:11.5px;font-weight:500;color:var(--muted)">从原文自动抽取，可核对</span></div>
+      <div class="id-grid">
+        <div><span>姓名</span><b>${esc(c.name || '未识别')}</b></div>
+        <div><span>当前身份</span><b>${esc(c.title || '未识别')}</b></div>
+        <div><span>工作年限</span><b>${c.years ? `${esc(c.years)} 年` : '未识别'}</b></div>
+        <div><span>城市</span><b>${esc(c.city || '未识别')}</b></div>
+        <div><span>教育背景</span><b>${esc(c.education || '未识别')}</b></div>
+        <div><span>目标岗位</span><b>${esc(r.targetRole || p.targetRole?.title || '未指定')}</b></div>
+      </div>
+    </div>
+
+    <div class="card summary-card" style="margin-top:14px">
       <div class="title-sm">人物画像</div>
       <p>${esc(p.summary || '暂无画像')}</p>
       <div class="chips" style="margin-top:14px">
-        ${c.education ? `<span class="chip">${esc(c.education)}</span>` : ''}
         ${p.targetRole?.level ? `<span class="chip">目标级别：${esc(p.targetRole.level)}</span>` : ''}
         ${p.targetRole?.reason ? `<span class="chip brand">${esc(p.targetRole.reason)}</span>` : ''}
       </div>
@@ -678,43 +818,131 @@ function panelProfile() {
 
 function bindProfile() {}
 
-/* ---------- 知识点 ---------- */
+/* ---------- 知识点图谱 ---------- */
+
+function sortedTopics() {
+  return (state.record?.topics || [])
+    .slice()
+    .sort((a, b) => b.priority - a.priority || Number(b.gap) - Number(a.gap) || String(a.title).localeCompare(String(b.title)));
+}
+
+function graphSvg() {
+  const groups = state.record?.groups || [];
+  const mats = new Set((state.record.materials || []).filter((m) => !m.error).map((m) => m.topicId));
+
+  let y = 54;
+  const nodes = [];
+  const groupNodes = [];
+  groups.forEach((g) => {
+    const startY = y;
+    g.topics.forEach((t) => {
+      nodes.push({ t, y });
+      y += 30;
+    });
+    groupNodes.push({ name: g.name, y: (startY + y - 30) / 2, count: g.topics.length });
+    y += 18;
+  });
+  const H = Math.max(300, y + 20);
+  const centerY = H / 2;
+
+  const edge = (x1, y1, x2, y2, cls) =>
+    `<path class="gedge ${cls}" d="M ${x1} ${y1} C ${x1 + 70} ${y1}, ${x2 - 70} ${y2}, ${x2} ${y2}" />`;
+
+  const edges = [];
+  const groupSvgs = [];
+  const topicSvgs = [];
+
+  groupNodes.forEach((g, gi) => {
+    edges.push(edge(120, centerY, 372, g.y, 'g1'));
+    groupSvgs.push(`<g class="gnode group" data-group="${gi}">
+      <circle cx="372" cy="${g.y}" r="7" />
+      <text x="388" y="${g.y + 4}" class="g-label">${esc(g.name)}</text>
+      <text x="388" y="${g.y + 18}" class="g-count">${g.count} 个考点</text>
+    </g>`);
+  });
+
+  nodes.forEach(({ t, y: ny }) => {
+    const gi = groupNodes.findIndex((g) => g.name === t.group);
+    const gy = gi >= 0 ? groupNodes[gi].y : centerY;
+    edges.push(edge(372, gy, 640, ny, 'g2'));
+    const done = mats.has(t.id);
+    const cls = ['topic-node', t.gap ? 'gap' : '', done ? 'done' : '', t.priority >= 5 ? 'hot' : ''].filter(Boolean).join(' ');
+    const fill = done ? '#2bb6a0' : t.priority >= 5 ? '#0f766e' : t.priority >= 4 ? '#5eead4' : '#c4cfcd';
+    topicSvgs.push(`<g class="${cls}" data-node="${esc(t.id)}">
+      <title>${esc(t.title)}｜${esc(t.level)}｜重要度 ${t.priority}${t.gap ? '｜简历缺口' : ''}${done ? '｜已有资料' : ''}</title>
+      <circle cx="640" cy="${ny}" r="${t.priority >= 5 ? 6 : 5}" fill="${fill}" />
+      <text x="654" y="${ny + 4}" class="n-label">${esc(t.title.length > 22 ? `${t.title.slice(0, 22)}…` : t.title)}</text>
+      ${done ? `<text x="896" y="${ny + 4}" class="n-done" text-anchor="end">资料✓</text>` : ''}
+    </g>`);
+  });
+
+  return `<svg class="kg" viewBox="0 0 900 ${H}" preserveAspectRatio="xMidYMin meet" role="img" aria-label="知识点图谱">
+    <defs><linearGradient id="hubGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#5eead4" /><stop offset="100%" stop-color="#2bb6a0" />
+    </linearGradient></defs>
+    ${edges.join('')}
+    <g class="hub">
+      <circle cx="120" cy="${centerY}" r="52" fill="url(#hubGrad)" opacity="0.16" />
+      <circle cx="120" cy="${centerY}" r="34" fill="url(#hubGrad)" />
+      <text x="120" y="${centerY + 4}" text-anchor="middle" class="hub-label">${esc((state.record.targetRole || '目标岗位').slice(0, 6))}</text>
+    </g>
+    ${groupSvgs.join('')}
+    ${topicSvgs.join('')}
+  </svg>`;
+}
 
 function panelTopics() {
   const r = state.record;
   const groups = r.groups || [];
   if (!groups.length) return emptyState('还没有知识点', '重新分析一次试试', '重新分析', 'home');
 
+  const materials = new Map((r.materials || []).filter((m) => !m.error).map((m) => [m.topicId, m]));
+  const list = sortedTopics();
+  const undone = list.slice(0, 5).filter((t) => !materials.has(t.id));
+
   return `
-    ${groups.map((g) => `<div class="card group-card">
-      <div class="group-head">
-        <div>
-          <h3>${esc(g.name)}</h3>
-          ${g.why ? `<p>${esc(g.why)}</p>` : ''}
-        </div>
-        <span class="chip" style="margin-left:auto;flex:none;font-size:11px">${g.topics.length} 个</span>
+    <div class="card graph-card">
+      <div class="card-title">简历知识图谱<span class="line"></span>
+        <span class="graph-legend">
+          <span><i class="dot hot"></i>必问</span>
+          <span><i class="dot"></i>一般</span>
+          <span><i class="dot done"></i>已有资料</span>
+          <span><i class="dot gap"></i>简历缺口</span>
+        </span>
       </div>
-      ${g.topics.map((t) => topicRow(t)).join('')}
-    </div>`).join('')}
+      <p class="graph-hint">从简历里的每一句往外扩散，长成面试会追问的考点树。点节点跳到对应模块。</p>
+      <div class="graph-wrap">${graphSvg()}</div>
+    </div>
+
+    <div class="card module-card">
+      <div class="card-title">学习模块（按优先级）<span class="line"></span>
+        <span class="module-sub">优先级 = 面试出现概率 × 简历相关度</span>
+        ${undone.length ? `<button class="btn btn-brand btn-sm" id="gen-top">先生成前 ${undone.length} 个</button>` : ''}
+      </div>
+      <div class="module-list">
+        ${list.map((t, i) => moduleRow(t, i + 1, materials.get(t.id))).join('')}
+      </div>
+    </div>
 
     <div class="action-bar">
       <span class="info">已选 <b id="sel-count">${state.selected.size}</b> / ${(r.topics || []).length} 个知识点</span>
       <button class="btn btn-quiet btn-sm" id="toggle-all">全选 / 反选</button>
       <span class="spacer"></span>
       <button class="btn btn-ghost btn-sm" id="quiz-btn">生成测验</button>
-      <button class="btn btn-brand btn-sm" id="material-btn">生成复习资料</button>
+      <button class="btn btn-brand btn-sm" id="material-btn">生成所选资料</button>
     </div>
   `;
 }
 
-function topicRow(t) {
+function moduleRow(t, rank, mat) {
   const on = state.selected.has(t.id);
-  return `<div class="topic" data-id="${esc(t.id)}">
+  return `<div class="module-row ${mat ? 'has-mat' : ''}" id="m-${esc(t.id)}">
+    <span class="rank ${rank <= 3 ? 'top' : ''}">${rank}</span>
     <button class="checkbox ${on ? 'on' : ''}" data-check="${esc(t.id)}" aria-label="选择">
       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
     </button>
-    <div class="topic-main">
-      <div class="topic-title">${esc(t.title)}</div>
+    <div class="module-main">
+      <div class="module-title">${esc(t.title)}</div>
       <div class="topic-badges">
         <span class="badge lv-${esc(t.level)}">${esc(t.level)}</span>
         <span class="badge stars" title="重要度">${stars(t.priority)}</span>
@@ -725,15 +953,20 @@ function topicRow(t) {
       </div>
       ${t.reason ? `<p class="topic-reason">${esc(t.reason)}</p>` : ''}
       ${t.interviewerFocus || (t.followups || []).length ? `<details style="margin-top:6px">
-        <summary style="font-size:12px;color:var(--brand-deep);cursor:pointer">面试官关注点与追问</summary>
+        <summary>面试官关注点与追问</summary>
         <div class="topic-more">
           ${t.interviewerFocus ? `<div><b>他在意什么：</b>${esc(t.interviewerFocus)}</div>` : ''}
-          ${(t.followups || []).length ? `<div style="margin-top:6px"><b>可能追问：</b></div>${t.followups.map((f) => `<div class="fq">· ${esc(f)}</div>`).join('')}` : ''}
+          ${(t.followups || []).length ? `<div style="margin-top:6px"><b>可能追问：</b></div>${t.followups.map((f) => `<div class="fq">· ${esc(f)}</div>`).join('')}</div>` : ''}
         </div>
       </details>` : ''}
-      <div style="margin-top:8px">
-        <button class="btn btn-quiet btn-sm" data-expand="${esc(t.id)}">✦ 围绕它拓展关联考点</button>
-      </div>
+    </div>
+    <div class="module-actions">
+      ${mat
+        ? `<span class="mat-state done">资料✓ ${DEPTH_LABEL[mat.depth] || ''}</span>
+           <button class="btn btn-quiet btn-sm" data-open-mat="${esc(t.id)}">查看</button>`
+        : `<span class="mat-state">未生成</span>
+           <button class="btn btn-brand btn-sm" data-gen-one="${esc(t.id)}">生成资料</button>`}
+      <button class="btn btn-quiet btn-sm" data-expand="${esc(t.id)}">✦ 拓展</button>
     </div>
   </div>`;
 }
@@ -753,6 +986,28 @@ function bindTopics() {
     expandTopic(e.currentTarget.dataset.expand);
   });
 
+  on('[data-gen-one]', 'click', (e) => {
+    e.stopPropagation();
+    generateMaterials(false, [e.currentTarget.dataset.genOne]);
+  });
+
+  on('[data-open-mat]', 'click', (e) => {
+    e.stopPropagation();
+    state.materialId = e.currentTarget.dataset.openMat;
+    state.tab = 'materials';
+    renderWorkspace();
+  });
+
+  on('.topic-node', 'click', (e) => {
+    const id = e.currentTarget.dataset.node;
+    const row = document.getElementById(`m-${id}`);
+    if (!row) return;
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    row.classList.remove('flash');
+    void row.offsetWidth;
+    row.classList.add('flash');
+  });
+
   const toggle = document.getElementById('toggle-all');
   if (toggle) {
     toggle.addEventListener('click', () => {
@@ -763,11 +1018,14 @@ function bindTopics() {
     });
   }
 
+  const genTop = document.getElementById('gen-top');
+  if (genTop) genTop.addEventListener('click', () => generateTop(5));
+
   const matBtn = document.getElementById('material-btn');
-  if (matBtn) matBtn.addEventListener('click', generateMaterials);
+  if (matBtn) matBtn.addEventListener('click', () => generateMaterials());
 
   const quizBtn = document.getElementById('quiz-btn');
-  if (quizBtn) quizBtn.addEventListener('click', generateQuiz);
+  if (quizBtn) quizBtn.addEventListener('click', () => generateQuiz());
 }
 
 /* ---------- 资料 ---------- */
@@ -778,59 +1036,86 @@ function panelMaterials() {
   const missing = (r.topics || []).length - materials.length;
 
   if (!materials.length) {
+    const top = sortedTopics().slice(0, 5);
     return emptyState(
       '还没有生成复习资料',
-      '按知识点生成面试官视角的复习笔记：一句话本质、原理、答题框架、追问与坑。首次生成 8 个知识点约需 1~2 分钟。',
-      '生成全部资料',
-      'materials-all',
+      `按优先级生成面试官视角的复习笔记：一句话本质、原理、答题框架、追问与坑。当前深度「${DEPTH_LABEL[state.depth]}」。`,
+      top.length ? `生成优先级最高的 ${top.length} 个` : '生成全部资料',
+      'materials-top',
     );
   }
 
   const current = materials.find((m) => m.topicId === state.materialId) || materials[0];
-  const groups = r.groups || [];
+  const hist = state.viewVersion && current.history?.[state.viewVersion - 1];
+  const view = hist ? hist.data : current;
+  const list = sortedTopics();
 
   return `
     <div class="mat-toolbar">
-      <button class="btn btn-brand btn-sm" id="expand-current">✦ 拓展这个知识点的关联考点</button>
+      <div class="depth-switch compact" id="mat-depth">
+        ${Object.entries(DEPTH_LABEL).map(([k, v]) => `<button type="button" data-depth="${k}" class="${state.depth === k ? 'on' : ''}">${v}</button>`).join('')}
+      </div>
+      <button class="btn btn-brand btn-sm" id="regen-current">按「${DEPTH_LABEL[state.depth]}」重写这篇</button>
+      <span class="spacer"></span>
+      <button class="btn btn-quiet btn-sm" id="expand-current">✦ 拓展关联考点</button>
+      <button class="btn btn-ghost btn-sm" id="download-current">下载这篇</button>
       <button class="btn btn-ghost btn-sm" id="print-btn">打印 / 存 PDF</button>
-      <button class="btn btn-ghost btn-sm" id="export-md">导出全部 Markdown</button>
-      ${missing > 0 ? `<button class="btn btn-ghost btn-sm" id="more-mat">继续生成剩余 ${missing} 个</button>` : ''}
+      <button class="btn btn-ghost btn-sm" id="export-md">导出全部</button>
     </div>
+    ${missing > 0 ? `<div class="mat-tip">还有 ${missing} 个模块没生成资料，左侧带虚线圆点的可以直接点开生成。</div>` : ''}
     <div class="material-layout">
       <nav class="material-nav">
-        ${groups
-          .map((g) => {
-            const items = g.topics.filter((t) => materials.some((m) => m.topicId === t.id));
-            if (!items.length) return '';
-            return `<div class="nav-group">${esc(g.name)}</div>
-              ${items
-                .map((t) => {
-                  const done = materials.find((m) => m.topicId === t.id);
-                  return `<button class="nav-item ${done?.topicId === current.topicId ? 'on' : ''} done" data-mat="${esc(t.id)}">
-                    <span class="dot"></span><span>${esc(t.title)}</span>
-                  </button>`;
-                })
-                .join('')}`;
+        ${list
+          .map((t) => {
+            const done = materials.find((m) => m.topicId === t.id);
+            if (!done) {
+              return `<button class="nav-item pending" data-gen="${esc(t.id)}">
+                <span class="dot"></span><span>${esc(t.title)}</span><span class="nav-cta">生成</span>
+              </button>`;
+            }
+            return `<button class="nav-item ${done.topicId === current.topicId ? 'on' : ''} done" data-mat="${esc(t.id)}">
+              <span class="dot"></span><span>${esc(t.title)}</span>
+            </button>`;
           })
           .join('')}
       </nav>
-      <div class="material-body">${materialBody(current)}</div>
+      <div class="material-body">${materialBody(view, current)}</div>
     </div>
   `;
 }
 
-function materialBody(m) {
+function materialBody(m, current) {
   if (!m) return '';
   const fw = m.answerFramework || [];
+  const history = current?.history || [];
+  const isOld = Boolean(state.viewVersion);
   return `
+    ${isOld ? `<div class="version-banner">
+      <span>正在查看历史版本 v${state.viewVersion}（${DEPTH_LABEL[m.depth] || m.depth || '—'}，${esc(fmtDate(m.createdAt))}）</span>
+      <button class="btn btn-quiet btn-sm" id="exit-version">返回当前版本</button>
+    </div>` : ''}
     <div class="mat-head">
       <div class="chips" style="margin-bottom:10px">
         <span class="badge lv-${esc(m.level || '进阶')}">${esc(m.level || '')}</span>
+        <span class="badge brand">${DEPTH_LABEL[m.depth] || '中等'}</span>
         <span class="badge">${esc(m.group || '')}</span>
         ${m.gap ? '<span class="badge gap">简历缺口</span>' : ''}
+        ${current?.version ? `<span class="badge">v${current.version}</span>` : ''}
+      </div>
+      <div class="mat-head-actions">
+        <button class="btn btn-quiet btn-sm" id="download-this">下载 .md</button>
+        ${history.length ? `<button class="btn btn-quiet btn-sm" id="history-btn">历史版本 ${history.length}</button>` : ''}
       </div>
       <h2>${esc(m.topicTitle)}</h2>
       ${m.oneLine ? `<div class="one-line">${esc(m.oneLine)}</div>` : ''}
+      ${state.historyOpen && history.length ? `<div class="history-list">
+        ${history.map((h, i) => `<div class="history-row ${state.viewVersion === i + 1 ? 'on' : ''}">
+          <span class="hv">v${history.length - i}</span>
+          <span class="hd">${DEPTH_LABEL[h.depth] || h.depth || '—'} · ${esc(fmtDate(h.createdAt))}</span>
+          <button class="btn btn-quiet btn-sm" data-view-version="${i + 1}">查看</button>
+          <button class="btn btn-quiet btn-sm" data-dl-version="${i + 1}">下载</button>
+        </div>`).join('')}
+      </div>` : ''}
     </div>
 
     ${(m.core || []).length ? `<div class="block">
@@ -889,23 +1174,102 @@ function materialBody(m) {
       <h4>延伸阅读</h4>
       <ul class="refs">${m.references.map((rf) => `<li><b>${esc(rf.title)}</b>${rf.note ? `　${esc(rf.note)}` : ''}</li>`).join('')}</ul>
     </div>` : ''}
+
+    ${(m.sources || []).length ? `<div class="block sources-block">
+      <h4>参考来源<span class="src-note">全网检索，点击可核对原文</span></h4>
+      <ol class="sources">${m.sources.map((s) => `<li>
+        ${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title || s.url)}</a>` : `<span>${esc(s.title || '来源')}</span>`}
+        ${s.url ? `<span class="src-host">${esc(hostOf(s.url))}</span>` : ''}
+      </li>`).join('')}</ol>
+    </div>` : ''}
   `;
+}
+
+function hostOf(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+function renderMaterialBody() {
+  const body = document.querySelector('.material-body');
+  const m = (state.record.materials || []).find((x) => x.topicId === state.materialId);
+  if (!body || !m) return;
+  const hist = state.viewVersion && m.history?.[state.viewVersion - 1];
+  body.innerHTML = materialBody(hist ? hist.data : m, m);
+  bindMaterials();
 }
 
 function bindMaterials() {
   on('[data-mat]', 'click', (e) => {
     state.materialId = e.currentTarget.dataset.mat;
+    state.viewVersion = 0;
+    state.historyOpen = false;
     document.querySelectorAll('.nav-item').forEach((n) => n.classList.toggle('on', n.dataset.mat === state.materialId));
-    const body = document.querySelector('.material-body');
-    const m = (state.record.materials || []).find((x) => x.topicId === state.materialId);
-    if (body) {
-      body.innerHTML = materialBody(m);
-      bindMaterials();
-      body.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
+    renderMaterialBody();
+    document.querySelector('.material-body')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  on('[data-gen]', 'click', (e) => {
+    const id = e.currentTarget.dataset.gen;
+    state.materialId = id;
+    generateMaterials(false, [id]);
   });
 
   on('.qa-q', 'click', (e) => e.currentTarget.closest('.qa').classList.toggle('open'));
+
+  on('#mat-depth [data-depth]', 'click', (e) => {
+    state.depth = e.currentTarget.dataset.depth;
+    localStorage.setItem('if-depth', state.depth);
+    document.querySelectorAll('#mat-depth [data-depth]').forEach((b) => b.classList.toggle('on', b.dataset.depth === state.depth));
+    const regen = document.getElementById('regen-current');
+    if (regen) regen.textContent = `按「${DEPTH_LABEL[state.depth]}」重写这篇`;
+  });
+
+  const regen = document.getElementById('regen-current');
+  if (regen) {
+    regen.addEventListener('click', () => {
+      if (!state.materialId) return;
+      generateMaterials(false, [state.materialId], { force: true });
+    });
+  }
+
+  const dl = document.getElementById('download-this');
+  if (dl) {
+    dl.addEventListener('click', () => {
+      const v = state.viewVersion || 0;
+      window.open(`/api/analyses/${state.record.id}/materials/${state.materialId}.md${v ? `?version=${v}` : ''}`, '_blank');
+    });
+  }
+
+  const histBtn = document.getElementById('history-btn');
+  if (histBtn) {
+    histBtn.addEventListener('click', () => {
+      state.historyOpen = !state.historyOpen;
+      renderMaterialBody();
+    });
+  }
+
+  on('[data-view-version]', 'click', (e) => {
+    state.viewVersion = Number(e.currentTarget.dataset.viewVersion);
+    state.historyOpen = true;
+    renderMaterialBody();
+  });
+
+  on('[data-dl-version]', 'click', (e) => {
+    const v = Number(e.currentTarget.dataset.dlVersion);
+    window.open(`/api/analyses/${state.record.id}/materials/${state.materialId}.md?version=${v}`, '_blank');
+  });
+
+  const exitVersion = document.getElementById('exit-version');
+  if (exitVersion) {
+    exitVersion.addEventListener('click', () => {
+      state.viewVersion = 0;
+      renderMaterialBody();
+    });
+  }
 
   const more = document.getElementById('more-mat');
   if (more) more.addEventListener('click', () => generateMaterials(true));
@@ -918,6 +1282,144 @@ function bindMaterials() {
 
   const exportMd = document.getElementById('export-md');
   if (exportMd) exportMd.addEventListener('click', () => window.open(`/api/analyses/${state.record.id}/export.md`, '_blank'));
+}
+
+/* ---------- 面试报告 ---------- */
+
+function panelReport() {
+  const r = state.record;
+  const rep = r.report;
+
+  if (!rep) {
+    return `<div class="card report-empty">
+      <div class="card-title">面试准备报告<span class="line"></span></div>
+      <p class="report-intro">把简历、知识点、已生成的资料和全网检索结果合成一份判断：你现在能不能过、会卡在哪、先学什么、怎么排时间。</p>
+      <div class="depth-switch" id="report-depth">
+        ${Object.entries(DEPTH_LABEL).map(([k, v]) => `<button type="button" data-depth="${k}" class="${state.reportDepth === k ? 'on' : ''}"><b>${v}</b><span>${DEPTH_DESC[k]}</span></button>`).join('')}
+      </div>
+      <button class="btn btn-brand" id="gen-report">生成面试准备报告</button>
+    </div>`;
+  }
+
+  return `
+    <div class="report-head">
+      <div class="rh-main">
+        <div class="eyebrow">面试准备报告 · ${DEPTH_LABEL[rep.depth] || '中等'}档</div>
+        <h2>${esc(rep.headline || '')}</h2>
+        <div class="chips" style="margin-top:10px">
+          <span class="chip ${rep.verdict?.fit === '匹配' ? 'brand' : 'gap'}">匹配度：${esc(rep.verdict?.fit || '—')}</span>
+          <span class="chip">通过概率：${esc(rep.verdict?.passProbability || '—')}</span>
+          <span class="chip">${esc(fmtDate(rep.createdAt))}</span>
+          ${rep.version ? `<span class="chip">v${rep.version}</span>` : ''}
+        </div>
+      </div>
+      <div class="rh-actions">
+        <button class="btn btn-brand btn-sm" id="dl-report">下载报告 .md</button>
+        <button class="btn btn-ghost btn-sm" id="regen-report">按「${DEPTH_LABEL[state.reportDepth]}」重新生成</button>
+      </div>
+    </div>
+
+    <div class="report-layout">
+      <div>
+        <div class="card">
+          <div class="card-title">总体判断<span class="line"></span></div>
+          <div class="prose">${md(rep.verdict?.summary || '')}</div>
+          ${(rep.strengths || []).length ? `<div class="title-sm" style="margin:16px 0 8px">能打的点</div>
+            <ul class="list-clean">${rep.strengths.map((s) => `<li>${esc(s)}</li>`).join('')}</ul>` : ''}
+        </div>
+
+        ${(rep.gaps || []).length ? `<div class="card" style="margin-top:14px">
+          <div class="card-title">致命短板<span class="line"></span></div>
+          ${rep.gaps.map((g, i) => `<div class="gap-item">
+            <span class="gn">${i + 1}</span>
+            <div>
+              <h5>${esc(g.point)}</h5>
+              ${g.impact ? `<p class="impact">${esc(g.impact)}</p>` : ''}
+              ${g.fix ? `<p class="fix">怎么补：${esc(g.fix)}</p>` : ''}
+            </div>
+          </div>`).join('')}
+        </div>` : ''}
+
+        ${(rep.path || []).length ? `<div class="card" style="margin-top:14px">
+          <div class="card-title">学习路径<span class="line"></span></div>
+          <div class="path">${rep.path.map((p) => `<div class="path-item">
+            <div class="path-dot"></div>
+            <div>
+              <h5>${esc(p.phase)}</h5>
+              ${p.goal ? `<p class="goal">${esc(p.goal)}</p>` : ''}
+              <ul class="list-clean">${(p.items || []).map((it) => `<li>${esc(it)}</li>`).join('')}</ul>
+            </div>
+          </div>`).join('')}</div>
+        </div>` : ''}
+
+        ${(rep.interviewSim || []).length ? `<div class="card" style="margin-top:14px">
+          <div class="card-title">各轮面试预演<span class="line"></span></div>
+          <div class="rounds">${rep.interviewSim.map((rd) => `<div class="round">
+            <h5>${esc(rd.round)}</h5>
+            ${(rd.focus || []).length ? `<div class="chips">${rd.focus.map((f) => `<span class="chip">${esc(f)}</span>`).join('')}</div>` : ''}
+            <ul class="list-clean" style="margin-top:8px">${(rd.typicalQuestions || []).map((q) => `<li>${esc(q)}</li>`).join('')}</ul>
+          </div>`).join('')}</div>
+        </div>` : ''}
+      </div>
+
+      <aside>
+        <div class="card">
+          <div class="card-title">模块优先级<span class="line"></span></div>
+          <div class="report-modules">
+            ${(rep.modules || []).map((m) => {
+              const done = (r.materials || []).some((x) => x.topicId === m.topicId && !x.error);
+              return `<div class="rm ${done ? 'done' : ''}">
+                <span class="rm-order">${m.order}</span>
+                <div class="rm-main">
+                  <div class="rm-title">${esc(m.title)}</div>
+                  <div class="rm-meta">${stars(m.priority)}${m.hours ? ` · ${esc(m.hours)}` : ''}${m.depth ? ` · ${esc(m.depth)}` : ''}</div>
+                  ${m.why ? `<p class="rm-why">${esc(m.why)}</p>` : ''}
+                </div>
+                ${done
+                  ? `<button class="btn btn-quiet btn-sm" data-open-mat="${esc(m.topicId)}">查看</button>`
+                  : m.topicId
+                    ? `<button class="btn btn-brand btn-sm" data-gen-one="${esc(m.topicId)}">生成</button>`
+                    : ''}
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+
+        ${(rep.sources || []).length ? `<div class="card sources-block" style="margin-top:14px">
+          <div class="card-title">参考来源<span class="line"></span></div>
+          <ol class="sources">${rep.sources.map((s) => `<li>
+            ${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title || s.url)}</a>` : `<span>${esc(s.title || '来源')}</span>`}
+            ${s.url ? `<span class="src-host">${esc(hostOf(s.url))}</span>` : ''}
+            ${s.note ? `<div class="src-note">${esc(s.note)}</div>` : ''}
+          </li>`).join('')}</ol>
+        </div>` : ''}
+      </aside>
+    </div>
+  `;
+}
+
+function bindReport() {
+  const gen = document.getElementById('gen-report');
+  if (gen) gen.addEventListener('click', () => generateReport());
+
+  const regen = document.getElementById('regen-report');
+  if (regen) regen.addEventListener('click', () => generateReport());
+
+  on('#report-depth [data-depth]', 'click', (e) => {
+    state.reportDepth = e.currentTarget.dataset.depth;
+    localStorage.setItem('if-depth', state.reportDepth);
+    document.querySelectorAll('#report-depth [data-depth]').forEach((b) => b.classList.toggle('on', b.dataset.depth === state.reportDepth));
+  });
+
+  const dl = document.getElementById('dl-report');
+  if (dl) dl.addEventListener('click', () => window.open(`/api/analyses/${state.record.id}/report.md`, '_blank'));
+
+  on('[data-gen-one]', 'click', (e) => generateMaterials(false, [e.currentTarget.dataset.genOne]));
+  on('[data-open-mat]', 'click', (e) => {
+    state.materialId = e.currentTarget.dataset.openMat;
+    state.tab = 'materials';
+    renderWorkspace();
+  });
 }
 
 /* ---------- 测验 ---------- */
@@ -1248,6 +1750,8 @@ document.addEventListener('click', (e) => {
   if (!btn) return;
   const a = btn.dataset.action;
   if (a === 'materials-all') generateMaterials(true);
+  if (a === 'materials-top') generateTop(5);
+  if (a === 'report-new') generateReport();
   if (a === 'quiz-new') generateQuiz();
   if (a === 'go-quiz') { state.tab = 'quiz'; renderWorkspace(); }
   if (a === 'plan-new') generatePlan();
@@ -1283,12 +1787,18 @@ async function expandTopic(topicId) {
   }
 }
 
-async function generateMaterials(all = false) {
+async function generateMaterials(all = false, onlyIds = null, opts = {}) {
   const r = state.record;
   const generated = new Set((r.materials || []).filter((m) => !m.error).map((m) => m.topicId));
   let ids;
-  if (all) ids = (r.topics || []).map((t) => t.id).filter((id) => !generated.has(id));
-  else ids = [...state.selected].filter((id) => !generated.has(id));
+  if (onlyIds && onlyIds.length) {
+    // 指定生成（含按当前深度重写已有资料）
+    ids = onlyIds;
+  } else if (all) {
+    ids = (r.topics || []).map((t) => t.id).filter((id) => !generated.has(id));
+  } else {
+    ids = [...state.selected].filter((id) => !generated.has(id));
+  }
 
   if (!ids.length) {
     if (generated.size) {
@@ -1302,21 +1812,57 @@ async function generateMaterials(all = false) {
     return;
   }
 
+  const rewriting = Boolean(onlyIds?.length && onlyIds.every((id) => generated.has(id)));
   try {
     await runJob(
       api(`/api/analyses/${r.id}/materials`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topicIds: ids }),
+        body: JSON.stringify({ topicIds: ids, depth: state.depth }),
       }),
-      '正在写复习资料',
-      ids.length > 1 ? [`逐个知识点生成（共 ${ids.length} 个）`, '整理答题框架与追问'] : ['生成复习资料'],
+      rewriting ? '正在重写这篇资料' : '正在写复习资料',
+      ids.length > 1
+        ? [`按「${DEPTH_LABEL[state.depth]}」逐篇生成（共 ${ids.length} 个）`, '检索资料并把来源一并保存']
+        : [`按「${DEPTH_LABEL[state.depth]}」生成`, '检索资料并把来源一并保存'],
     );
     await refreshRecord();
     state.tab = 'materials';
     state.materialId = ids[0];
+    state.viewVersion = 0;
+    state.historyOpen = false;
     renderWorkspace();
-    toast('资料已生成');
+    toast(rewriting ? '已按新深度重写' : '资料已生成');
+  } catch (err) {
+    /* 浮层已提示 */
+  }
+}
+
+/** 自动生成优先级最高的 N 个模块 */
+async function generateTop(n = 5) {
+  const r = state.record;
+  if (!r) return;
+  const generated = new Set((r.materials || []).filter((m) => !m.error).map((m) => m.topicId));
+  const ids = sortedTopics().filter((t) => !generated.has(t.id)).slice(0, n).map((t) => t.id);
+  if (!ids.length) return toast('优先级最高的模块都已有资料了');
+  await generateMaterials(false, ids);
+}
+
+async function generateReport() {
+  const r = state.record;
+  try {
+    await runJob(
+      api(`/api/analyses/${r.id}/report`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ depth: state.reportDepth }),
+      }),
+      '正在生成面试准备报告',
+      ['检索岗位面经与行业资料', '汇总成报告：判断 / 排序 / 路径'],
+    );
+    await refreshRecord();
+    state.tab = 'report';
+    renderWorkspace();
+    toast('报告已生成');
   } catch (err) {
     /* 浮层已提示 */
   }

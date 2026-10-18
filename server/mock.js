@@ -484,22 +484,97 @@ const MATERIALS = {
   },
 };
 
-const MATERIAL_TEMPLATE = (title) => ({
+const MATERIAL_TEMPLATE = (title, depth = 'standard') => ({
   oneLine: `先把「${title}」讲成一条因果链，再准备三个能被追问的细节。`,
-  core: ['先给结论，再给原因，最后给边界条件。', '准备一个真实项目里的数字。', '准备一个你踩过的坑。'],
-  principle: `关于「${title}」，面试官真正想确认的是你有没有在一线做过判断。回答时先讲你遇到的场景，再讲方案取舍，最后给结果。`,
+  core:
+    depth === 'lite'
+      ? ['先给结论，再给原因。', '准备一个真实项目里的数字。']
+      : ['先给结论，再给原因，最后给边界条件。', '准备一个真实项目里的数字。', '准备一个你踩过的坑。'],
+  principle:
+    depth === 'deep'
+      ? `关于「${title}」，面试官真正想确认的是你有没有在一线做过判断。\n\n**机制层**：先把关键链路的每一步说清——输入如何被处理、在哪一步产生损耗、参数怎么影响结果。\n\n**取舍对比**：方案 A 胜在实现简单、延迟低，但边界一放宽就失效；方案 B 覆盖更全，代价是资源占用与调优成本。真正做决策时要看 QPS、数据分布和可接受的错误率。\n\n**失效场景**：数据分布漂移、长尾 query、冷启动阶段，都是这类方案最容易翻车的地方，回答时主动点出来会加分。`
+      : `关于「${title}」，面试官真正想确认的是你有没有在一线做过判断。回答时先讲你遇到的场景，再讲方案取舍，最后给结果。`,
   resumeHook: `简历中与「${title}」相关的表述会引出这个问题。`,
-  answerFramework: [
-    { step: '给结论', say: '先用一句话回答核心判断。' },
-    { step: '讲原因', say: '说明为什么这样选，另外的方案差在哪。' },
-    { step: '给证据', say: '用项目里的数字或现象支撑。' },
-  ],
-  followups: [{ q: '如果条件反过来，你会怎么改？', a: '说明边界变化后方案如何调整。', trap: '只背结论、不讲条件。' }],
-  pitfalls: ['只讲概念不讲取舍。'],
-  bonus: ['带上真实数据。'],
+  answerFramework:
+    depth === 'deep'
+      ? [
+          { step: '先给结论', say: '一句话说明你的判断，不要铺垫。' },
+          { step: '再讲机制', say: '把链路拆成三步，说清每步的损耗。' },
+          { step: '做对比', say: '另一种方案在什么条件下会更优。' },
+          { step: '给证据', say: '用项目里的数字或现象支撑。' },
+          { step: '主动收尾', say: '补一句适用边界，把话题引向你熟的领域。' },
+        ]
+      : [
+          { step: '给结论', say: '先用一句话回答核心判断。' },
+          { step: '讲原因', say: '说明为什么这样选，另外的方案差在哪。' },
+          { step: '给证据', say: '用项目里的数字或现象支撑。' },
+        ],
+  followups:
+    depth === 'deep'
+      ? [
+          { q: '如果条件反过来，你会怎么改？', a: '说明边界变化后方案如何调整。', trap: '只背结论、不讲条件。' },
+          { q: '线上真的出过问题吗？怎么定位的？', a: '讲一次真实故障：现象、排查路径、根因、止损。', trap: '含糊说"优化过"，说不出定位过程。' },
+          { q: '如果流量涨 10 倍，哪里先崩？', a: '指出瓶颈环节并给出扩容或降级方案。', trap: '只说加机器。' },
+        ]
+      : [{ q: '如果条件反过来，你会怎么改？', a: '说明边界变化后方案如何调整。', trap: '只背结论、不讲条件。' }],
+  pitfalls: depth === 'deep' ? ['只讲概念不讲取舍。', '把手段当目的，说不出为什么。', '回避真实故障。'] : ['只讲概念不讲取舍。'],
+  bonus: depth === 'deep' ? ['带上真实数据。', '主动说明失效边界。', '能说出同类方案的迁移经验。'] : ['带上真实数据。'],
   drill: { question: `用一个你自己的项目例子说明「${title}」。`, hint: '场景 → 取舍 → 结果。' },
-  references: [],
+  references: depth === 'lite' ? [] : [{ title: '官方文档对应章节', note: '重点看限制条件' }],
 });
+
+/* ---------------- 岗位预判（上传即填充） ---------------- */
+
+const PREFILL = {
+  roles: [
+    { title: 'AI 应用开发工程师', level: '高级', fitScore: 78, reason: '有 8 个月 RAG 落地经验，后端功底扎实，缺评估体系。' },
+    { title: '后端技术专家（AI 方向）', level: '高级', fitScore: 71, reason: '订单中心与高并发经验强，AI 侧是加分而非主线。' },
+    { title: '大模型平台工程师', level: '中级', fitScore: 64, reason: '做过模型接入与成本优化，但缺少平台化建设经验。' },
+  ],
+  level: '高级',
+  headline: '工程底子硬、有真实 RAG 落地数据，但 AI 深度待补的后端。',
+  keywords: ['RAG', '检索优化', '高并发', '成本优化', 'Kubernetes'],
+};
+
+/* ---------------- 面试准备报告 ---------------- */
+
+const REPORT = {
+  headline: '能讲清做过什么，扛不住"为什么这么选"的连续追问',
+  verdict: {
+    fit: '匹配',
+    passProbability: '中',
+    summary:
+      '简历与目标岗位的主线是对得上的：有真实调用量、有采纳率提升、有成本数字，这三点在一面很能打。风险集中在深度：评估体系、重排原理、归因方法一旦被追问三层就会露怯。建议把前 5 个模块补到能脱稿讲 3 分钟，再去做模拟面。',
+  },
+  strengths: [
+    '有 1.2 万次日均调用与 79% 采纳率的真实数据，不是 Demo 级项目',
+    '把成本从 0.08 元降到 0.03 元，这类降本叙事在用人方眼里非常实用',
+    '高并发与稳定性经验可迁移，能接住系统设计追问',
+  ],
+  gaps: [
+    { point: 'RAG 评估体系缺失', impact: '无法证明提升来自检索优化，归因一被追问就站不住', fix: '补齐召回率/忠实度/幻觉率三个指标的定义与采集方式，准备一张指标卡' },
+    { point: '重排只知其一', impact: '被问到"为什么不能直接替代召回"时容易答成性能问题', fix: '把召回与重排的职责边界、延迟预算、候选集规模讲成一条链路' },
+    { point: '算法侧空白', impact: 'JD 提到 SFT 与评测，简历完全没有体现', fix: '至少准备一个"如果让你做 SFT 会怎么构造数据"的完整回答' },
+  ],
+  modules: [
+    { topicId: 't1', title: 'RAG 检索质量：混合检索与重排为什么有效', priority: 5, order: 1, why: '简历主线，几乎必问，直接决定一面评价', hours: '2 小时', depth: '深度' },
+    { topicId: 't2', title: 'RAG 评估体系：召回率、忠实度与幻觉率怎么量', priority: 5, order: 2, why: '所有归因类追问的底座，不补就会被认定为"调通即上线"', hours: '1.5 小时', depth: '深度' },
+    { topicId: 't3', title: '大模型成本优化：缓存、分流与降级的组合拳', priority: 4, order: 3, why: '你的降本数字很有说服力，要能讲清每一分钱省在哪', hours: '1 小时', depth: '中等' },
+    { topicId: 't4', title: '高并发订单系统的分库分表边界', priority: 4, order: 4, why: '系统设计轮的基础盘，用来证明工程底子', hours: '1 小时', depth: '中等' },
+    { topicId: 't5', title: 'Prompt 工程的版本管理与回归', priority: 3, order: 5, why: '容易被问"怎么保证改 prompt 不退化"，有方法论就占优', hours: '40 分钟', depth: '简单' },
+  ],
+  path: [
+    { phase: '第 1 阶段（D1-D2）', goal: '把主线两个模块讲到能脱稿 3 分钟', items: ['精读 RAG 检索质量资料，录音复述一遍', '写出评估指标卡：定义、采集、阈值', '用自己项目数字重写"采纳率提升"归因话术'] },
+    { phase: '第 2 阶段（D3-D4）', goal: '补系统设计与成本叙事', items: ['整理分库分表的时间线：为什么那时拆、拆完踩了什么', '把成本拆成三块并各配一个数字'] },
+    { phase: '第 3 阶段（D5-D7）', goal: '模拟面试与话术打磨', items: ['做一次 45 分钟模拟面，重点练追问', '准备 3 个反问问题', '把"我不知道"的标准答法练熟'] },
+  ],
+  interviewSim: [
+    { round: '一面（技术基础）', focus: ['检索链路', '指标定义'], typicalQuestions: ['混合检索为什么比单路好？', '你怎么衡量忠实度？', '重排的延迟预算是多少？'] },
+    { round: '二面（系统设计）', focus: ['方案取舍', '故障处理'], typicalQuestions: ['设计一个支撑 10 万 QPS 的问答系统', '向量库挂了怎么降级？', '怎么防止 prompt 注入？'] },
+    { round: 'HR 面', focus: ['动机', '稳定性'], typicalQuestions: ['为什么想换方向？', '期望的成长路径是什么？'] },
+  ],
+  sources: [{ title: 'RAG 评估实践综述', url: '', note: '用于支撑评估指标一节' }],
+};
 
 const QUIZ = {
   title: 'AI 应用开发 · 第一轮能力测验',
@@ -778,6 +853,8 @@ export function mockChat(messages) {
 
   const reply = (obj) => JSON.stringify(obj);
 
+  if (system.includes('判断这个人下一步最该投什么岗位')) return reply(PREFILL);
+
   if (system.includes('读懂一份简历')) return reply(PROFILE);
 
   if (system.includes('必须复习的知识点')) {
@@ -786,10 +863,14 @@ export function mockChat(messages) {
 
   if (system.includes('一份可以直接拿去面试的复习资料')) {
     const title = (user.match(/【要写的知识点】(.+)/) || [])[1]?.trim() || '这个知识点';
+    const label = (user.match(/【本次深度】(简单|中等|深度)/) || [])[1] || '中等';
+    const depth = label === '简单' ? 'lite' : label === '深度' ? 'deep' : 'standard';
     const hit = Object.entries(MATERIALS).find(([, m]) => m.oneLine && TOPICS.flatMap((g) => g.topics).some((t) => t.title === title));
-    if (hit) return reply(MATERIALS[hit[0]]);
-    return reply(MATERIAL_TEMPLATE(title));
+    if (hit && depth === 'standard') return reply(MATERIALS[hit[0]]);
+    return reply(MATERIAL_TEMPLATE(title, depth));
   }
+
+  if (system.includes('面试准备报告')) return reply(REPORT);
 
   if (system.includes('出一套测验题')) return reply(QUIZ);
 

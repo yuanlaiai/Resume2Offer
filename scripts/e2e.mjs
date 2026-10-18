@@ -29,19 +29,44 @@ form.append('targetRole', 'AI 应用开发工程师');
 form.append('level', '高级');
 form.append('text', text);
 
+console.log('0) prefill（上传即识别岗位）...');
+const pfForm = new FormData();
+pfForm.append('text', text);
+const pf = await j('/api/prefill', { method: 'POST', body: pfForm });
+if (!pf.roles?.length) throw new Error('prefill 没有返回岗位');
+console.log(`   ok: roles=${pf.roles.map((r) => r.title).join(' / ')} level=${pf.level}`);
+
 console.log('1) analyze...');
 const a = await j('/api/analyze', { method: 'POST', body: form });
 const an = await waitJob(a.jobId);
 console.log(`   ok: id=${an.analysisId} topics=${an.topics.length} groups=${an.groups.length}`);
 
-console.log('2) materials (first 3)...');
+console.log('2) materials（深度档 = 深度）...');
 const m = await j(`/api/analyses/${an.analysisId}/materials`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ topicIds: an.topics.slice(0, 3).map((t) => t.id) }),
+  body: JSON.stringify({ topicIds: an.topics.slice(0, 3).map((t) => t.id), depth: 'deep' }),
 });
 const mat = await waitJob(m.jobId);
-console.log(`   ok: materials=${mat.materials.length} first="${mat.materials[0].oneLine.slice(0, 30)}..."`);
+console.log(`   ok: materials=${mat.materials.length} depth=${mat.materials[0].depth} sources=${(mat.materials[0].sources || []).length} first="${mat.materials[0].oneLine.slice(0, 30)}..."`);
+
+console.log('2b) 改写单篇为简单档（版本历史）...');
+const m2 = await j(`/api/analyses/${an.analysisId}/materials`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ topicIds: [an.topics[0].id], depth: 'lite' }),
+});
+const mat2 = await waitJob(m2.jobId);
+const changed = mat2.materials.find((x) => x.topicId === an.topics[0].id);
+console.log(`   ok: depth=${changed.depth} version=${changed.version} history=${(changed.history || []).length}`);
+
+console.log('2c) 单篇下载（当前 + 历史版本）...');
+const one = await fetch(`${BASE}/api/analyses/${an.analysisId}/materials/${an.topics[0].id}.md`);
+const oneText = await one.text();
+if (!one.ok) throw new Error('单篇下载失败');
+const oldOne = await fetch(`${BASE}/api/analyses/${an.analysisId}/materials/${an.topics[0].id}.md?version=1`);
+const oldText = await oldOne.text();
+console.log(`   ok: current=${oneText.length} chars, history=${oldText.length} chars`);
 
 console.log('3) quiz...');
 const q = await j(`/api/analyses/${an.analysisId}/quiz`, {
@@ -84,15 +109,28 @@ const p = await j(`/api/analyses/${an.analysisId}/plan`, {
 const plan = await waitJob(p.jobId);
 console.log(`   ok: days=${plan.plan.days.length} focus=${plan.plan.focus.length}`);
 
-console.log('7) export.md & list...');
+console.log('7) report（附来源与优先级模块）...');
+const rp = await j(`/api/analyses/${an.analysisId}/report`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ depth: 'standard' }),
+});
+const rep = await waitJob(rp.jobId);
+console.log(`   ok: modules=${rep.report.modules.length} path=${rep.report.path.length} sources=${rep.report.sources.length} headline="${(rep.report.headline || '').slice(0, 24)}"`);
+const rmd = await fetch(`${BASE}/api/analyses/${an.analysisId}/report.md`);
+const rmdText = await rmd.text();
+if (!rmd.ok) throw new Error('报告下载失败');
+console.log(`   ok: report.md=${rmdText.length} chars`);
+
+console.log('8) export.md & list...');
 const md = await fetch(`${BASE}/api/analyses/${an.analysisId}/export.md`);
 const mdText = await md.text();
 console.log(`   ok: md=${mdText.length} chars, head="${mdText.slice(0, 60).replace(/\n/g, ' ')}"`);
 const list = await j('/api/analyses');
 console.log(`   ok: list=${list.items.length} lastScore=${list.items[0].lastScore}`);
 
-console.log('8) record shape...');
+console.log('9) record shape...');
 const rec = await j(`/api/analyses/${an.analysisId}`);
 console.log('   keys:', Object.keys(rec).join(','));
-console.log('   stage:', rec.stage, 'materials:', rec.materials.length, 'quizzes:', rec.quizzes.length, 'attempts:', rec.attempts.length);
+console.log('   stage:', rec.stage, 'materials:', rec.materials.length, 'report:', rec.report ? 'yes' : 'no', 'attempts:', rec.attempts.length);
 console.log('\nALL PASS');

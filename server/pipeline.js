@@ -9,6 +9,10 @@ import {
   buildGradePrompt,
   buildPlanPrompt,
   expandTopicsPrompt,
+  prefillPrompt,
+  buildReportPrompt,
+  depthSpec,
+  DEPTHS,
 } from './prompts.js';
 
 const clamp = (n, min, max, dflt) => {
@@ -128,6 +132,30 @@ async function pool(items, limit, worker) {
   return results;
 }
 
+/* ---------------- 0. 岗位预判（上传后自动填充） ---------------- */
+
+export async function prefillRole({ resumeText }) {
+  const raw = await chatJSON(prefillPrompt({ resumeText: resumeText.slice(0, 8000) }), {
+    temperature: 0.2,
+    maxTokens: 900,
+  });
+  const roles = arr(raw?.roles)
+    .map((r) => ({
+      title: str(r?.title),
+      level: ['初级', '中级', '高级', '专家', '管理'].includes(r?.level) ? r.level : '',
+      fitScore: clamp(r?.fitScore, 0, 100, 60),
+      reason: str(r?.reason),
+    }))
+    .filter((r) => r.title)
+    .slice(0, 3);
+  return {
+    roles,
+    level: str(raw?.level),
+    headline: str(raw?.headline),
+    keywords: arr(raw?.keywords).map(str).filter(Boolean).slice(0, 8),
+  };
+}
+
 /* ---------------- 1. 解析简历 + 知识点图谱 ---------------- */
 
 export async function runAnalyze(ctx, { resumeText, targetRole, level, fileName }) {
@@ -164,9 +192,12 @@ export async function runAnalyze(ctx, { resumeText, targetRole, level, fileName 
 
 /* ---------------- 2. 生成复习资料 ---------------- */
 
-export async function runMaterials(ctx, { analysisId, topicIds }) {
+export async function runMaterials(ctx, { analysisId, topicIds, depth = 'standard' }) {
   const record = store.get(analysisId);
   if (!record) throw new Error('找不到这份简历分析');
+
+  const level = DEPTHS[depth] ? depth : 'standard';
+  const spec = depthSpec(level);
 
   const all = record.topics || [];
   const wanted = topicIds && topicIds.length
@@ -178,15 +209,17 @@ export async function runMaterials(ctx, { analysisId, topicIds }) {
   const done = new Map((record.materials || []).map((m) => [m.topicId, m]));
   let finished = 0;
 
-  ctx.step(0, `准备生成 ${wanted.length} 个知识点的资料`);
+  ctx.step(0, `按「${spec.label}」深度生成 ${wanted.length} 个知识点的资料`);
 
   await pool(wanted, 2, async (topic) => {
     try {
-      // 可选联网增强：检索该知识点的相关资料注入提示词
+      // 联网检索：结果既注入提示词，也作为引用来源随资料一起保存
       let searchBlock = '';
+      let sources = [];
       if (searchReady()) {
         const results = await searchWeb(`${topic.title} 原理 面试 常见考点`, { maxResults: 4 });
         searchBlock = formatSearchBlock(results);
+        sources = results.map((r, i) => ({ index: i + 1, title: r.title, url: r.url }));
       }
       const raw = await chatJSON(
         buildMaterialPrompt({
@@ -195,16 +228,20 @@ export async function runMaterials(ctx, { analysisId, topicIds }) {
           group: topic.group,
           targetRole: record.targetRole,
           searchBlock,
+          depth: level,
         }),
-        { temperature: 0.45, maxTokens: 3200 },
+        { temperature: level === 'deep' ? 0.5 : 0.45, maxTokens: spec.maxTokens },
       );
-      done.set(topic.id, {
+
+      const prev = done.get(topic.id);
+      const body = {
         topicId: topic.id,
         topicTitle: topic.title,
         group: topic.group,
         level: topic.level,
         priority: topic.priority,
         gap: topic.gap,
+        depth: level,
         oneLine: str(raw?.oneLine),
         core: arr(raw?.core).map(str).filter(Boolean),
         principle: str(raw?.principle),
@@ -221,11 +258,19 @@ export async function runMaterials(ctx, { analysisId, topicIds }) {
         references: arr(raw?.references)
           .map((r) => ({ title: str(r?.title), note: str(r?.note) }))
           .filter((r) => r.title),
+        sources,
         createdAt: new Date().toISOString(),
+      };
+
+      done.set(topic.id, {
+        ...body,
+        version: (prev?.version || 0) + 1,
+        history: prev ? [snapshot(prev), ...(prev.history || [])].slice(0, 4) : [],
       });
     } catch (err) {
       console.error(`[materials] ${topic.title} 失败：`, err.message);
-      done.set(topic.id, {
+      const prev = done.get(topic.id);
+      done.set(topic.id, prev || {
         topicId: topic.id,
         topicTitle: topic.title,
         group: topic.group,
@@ -243,6 +288,16 @@ export async function runMaterials(ctx, { analysisId, topicIds }) {
   await store.update(analysisId, { materials, stage: 'materials' });
   ctx.tick(1, '资料已生成');
   return { analysisId, materials };
+}
+
+/** 历史版本只留正文，避免嵌套 */
+function snapshot(m) {
+  const { history, ...rest } = m;
+  return {
+    depth: rest.depth || 'standard',
+    createdAt: rest.createdAt || new Date().toISOString(),
+    data: rest,
+  };
 }
 
 /* ---------------- 3. 出题 ---------------- */
@@ -526,4 +581,121 @@ export async function runPlan(ctx, { analysisId, attemptId }) {
 
   await store.update(analysisId, { plan, stage: 'planned' });
   return { analysisId, plan };
+}
+
+/* ---------------- 7. 面试准备报告（全网检索 + 优先级模块 + 分阶段路径） ---------------- */
+
+export async function runReport(ctx, { analysisId, depth = 'standard' }) {
+  const record = store.get(analysisId);
+  if (!record) throw new Error('找不到这份简历分析');
+  const level = DEPTHS[depth] ? depth : 'standard';
+  const spec = depthSpec(level);
+
+  const topics = (record.topics || []).slice().sort((a, b) => b.priority - a.priority);
+  const top = topics.slice(0, 4);
+
+  ctx.step(0, '检索岗位面经与行业资料');
+  const searched = [];
+  if (searchReady()) {
+    const queries = [
+      `${record.targetRole} 面试 高频问题 考察重点`,
+      `${top.map((t) => t.title).slice(0, 2).join(' ')} 面试 深入`,
+    ];
+    for (const q of queries) {
+      const results = await searchWeb(q, { maxResults: 4 });
+      for (const r of results) {
+        if (!searched.some((s) => s.url && s.url === r.url)) searched.push(r);
+      }
+    }
+    ctx.note(searched.length ? `检索到 ${searched.length} 条外部资料` : '检索未命中，改用模型知识');
+  } else {
+    ctx.note('未配置联网检索，报告基于模型知识生成（.env 配 SEARCH_PROVIDER + SEARCH_API_KEY 可开启）');
+  }
+
+  const searchBlock = formatSearchBlock(searched.map((r) => ({ title: r.title, content: r.content, url: r.url })));
+
+  ctx.step(1, '生成报告');
+  const raw = await chatJSON(
+    buildReportPrompt({
+      profile: record.profile,
+      topics,
+      materials: record.materials,
+      targetRole: record.targetRole,
+      level: record.level,
+      depth: level,
+      searchBlock,
+    }),
+    { temperature: 0.4, maxTokens: spec.maxTokens + 1200 },
+  );
+
+  const validIds = new Set(topics.map((t) => t.id));
+  const modules = arr(raw?.modules)
+    .map((m, i) => ({
+      topicId: validIds.has(str(m?.topicId)) ? str(m.topicId) : '',
+      title: str(m?.title) || (validIds.has(str(m?.topicId)) ? topics.find((t) => t.id === str(m.topicId)).title : ''),
+      priority: clamp(m?.priority, 1, 5, 3),
+      order: clamp(m?.order, 1, 99, i + 1),
+      why: str(m?.why),
+      hours: str(m?.hours),
+      depth: ['简单', '中等', '深度'].includes(m?.depth) ? m.depth : spec.label,
+    }))
+    .filter((m) => m.title)
+    .sort((a, b) => a.order - b.order)
+    .slice(0, 30);
+
+  const modelSources = arr(raw?.sources)
+    .map((s) => ({ title: str(s?.title), url: str(s?.url), note: str(s?.note) }))
+    .filter((s) => s.title);
+
+  const sources = [
+    ...searched.map((r, i) => ({ index: i + 1, title: r.title, url: r.url, note: '' })),
+    ...modelSources.filter((s) => !s.url || !searched.some((r) => r.url === s.url)),
+  ].slice(0, 16);
+
+  const report = {
+    headline: str(raw?.headline),
+    verdict: {
+      fit: str(raw?.verdict?.fit) || '匹配',
+      passProbability: str(raw?.verdict?.passProbability) || '中',
+      summary: str(raw?.verdict?.summary),
+    },
+    strengths: arr(raw?.strengths).map(str).filter(Boolean).slice(0, 6),
+    gaps: arr(raw?.gaps)
+      .map((g) => ({ point: str(g?.point), impact: str(g?.impact), fix: str(g?.fix) }))
+      .filter((g) => g.point)
+      .slice(0, 6),
+    modules,
+    path: arr(raw?.path)
+      .map((p) => ({
+        phase: str(p?.phase),
+        goal: str(p?.goal),
+        items: arr(p?.items).map(str).filter(Boolean),
+      }))
+      .filter((p) => p.phase || p.items.length),
+    interviewSim: arr(raw?.interviewSim)
+      .map((r) => ({
+        round: str(r?.round),
+        focus: arr(r?.focus).map(str).filter(Boolean),
+        typicalQuestions: arr(r?.typicalQuestions).map(str).filter(Boolean).slice(0, 5),
+      }))
+      .filter((r) => r.round),
+    sources,
+    depth: level,
+    createdAt: new Date().toISOString(),
+  };
+
+  const prev = record.report;
+  const next = {
+    ...report,
+    version: (prev?.version || 0) + 1,
+    history: prev ? [{ depth: prev.depth, createdAt: prev.createdAt, data: stripHistory(prev) }, ...(prev.history || [])].slice(0, 4) : [],
+  };
+
+  await store.update(analysisId, { report: next, stage: 'reported' });
+  return { analysisId, report: next };
+}
+
+function stripHistory(r) {
+  const { history, ...rest } = r;
+  return rest;
 }

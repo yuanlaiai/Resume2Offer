@@ -8,8 +8,8 @@ import { store } from './store.js';
 import { startJob, getJob } from './jobs.js';
 import { extractResume, normalizeText } from './extract.js';
 import { describeLLM, LLMError } from './llm.js';
-import { runAnalyze, runMaterials, runQuiz, runGrade, runPlan, runExpand } from './pipeline.js';
-import { toMarkdown } from './export.js';
+import { runAnalyze, runMaterials, runQuiz, runGrade, runPlan, runExpand, runReport, prefillRole } from './pipeline.js';
+import { toMarkdown, materialMarkdown, reportMarkdown } from './export.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -55,6 +55,33 @@ app.delete('/api/analyses/:id', async (req, res) => {
   res.status(ok ? 200 : 404).json({ ok });
 });
 
+/* ---------------- 0. 上传即预判岗位（自动填充） ---------------- */
+
+app.post('/api/prefill', upload.single('resume'), async (req, res, next) => {
+  try {
+    let resumeText = '';
+    if (req.file) {
+      const parsed = await extractResume({
+        buffer: req.file.buffer,
+        filename: req.file.originalname,
+        mimetype: req.file.mimetype,
+      });
+      resumeText = parsed.text;
+    } else if (req.body?.text) {
+      resumeText = normalizeText(req.body.text);
+    }
+    if (!resumeText || resumeText.length < 40) {
+      return res.status(400).json({ error: '简历内容太短，无法判断岗位' });
+    }
+    if (!llmReady()) return res.status(503).json({ error: '未配置模型' });
+
+    const result = await prefillRole({ resumeText: resumeText.slice(0, 20000) });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 /* ---------------- 1. 上传简历 → 解析 + 知识点 ---------------- */
 
 app.post('/api/analyze', upload.single('resume'), async (req, res, next) => {
@@ -96,7 +123,10 @@ app.post('/api/analyses/:id/materials', (req, res, next) => {
   const record = store.get(req.params.id);
   if (!record) return res.status(404).json({ error: '记录不存在' });
   const topicIds = Array.isArray(req.body?.topicIds) ? req.body.topicIds.filter((x) => typeof x === 'string') : [];
-  const jobId = startJob(['生成复习资料'], (ctx) => runMaterials(ctx, { analysisId: record.id, topicIds }));
+  const depth = ['lite', 'standard', 'deep'].includes(req.body?.depth) ? req.body.depth : 'standard';
+  const jobId = startJob([`生成复习资料（${depth === 'lite' ? '简单' : depth === 'deep' ? '深度' : '中等'}）`], (ctx) =>
+    runMaterials(ctx, { analysisId: record.id, topicIds, depth }),
+  );
   res.json({ jobId });
 });
 
@@ -147,6 +177,18 @@ app.post('/api/analyses/:id/expand', (req, res, next) => {
   res.json({ jobId });
 });
 
+/* ---------------- 7. 面试准备报告 ---------------- */
+
+app.post('/api/analyses/:id/report', (req, res, next) => {
+  const record = store.get(req.params.id);
+  if (!record) return res.status(404).json({ error: '记录不存在' });
+  const depth = ['lite', 'standard', 'deep'].includes(req.body?.depth) ? req.body.depth : 'standard';
+  const jobId = startJob(['检索岗位面经与行业资料', '生成报告'], (ctx) =>
+    runReport(ctx, { analysisId: record.id, depth }),
+  );
+  res.json({ jobId });
+});
+
 /* ---------------- 任务进度 ---------------- */
 
 app.get('/api/jobs/:id', (req, res) => {
@@ -157,14 +199,38 @@ app.get('/api/jobs/:id', (req, res) => {
 
 /* ---------------- 导出 Markdown ---------------- */
 
+function sendMd(res, md, name) {
+  res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
+  res.send(md);
+}
+
 app.get('/api/analyses/:id/export.md', (req, res) => {
   const record = store.get(req.params.id);
   if (!record) return res.status(404).json({ error: '记录不存在' });
   const md = toMarkdown(record);
-  const name = `${record.profile?.candidate?.name || '候选人'}-${record.targetRole || '面试'}-复习手册.md`;
-  res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
-  res.send(md);
+  sendMd(res, md, `${record.profile?.candidate?.name || '候选人'}-${record.targetRole || '面试'}-复习手册.md`);
+});
+
+/** 单篇资料下载：?version=0 取当前版本，1..n 取历史版本 */
+app.get('/api/analyses/:id/materials/:topicId.md', (req, res) => {
+  const record = store.get(req.params.id);
+  if (!record) return res.status(404).json({ error: '记录不存在' });
+  const current = (record.materials || []).find((m) => m.topicId === req.params.topicId);
+  if (!current) return res.status(404).json({ error: '这篇资料还没生成' });
+
+  const v = Number(req.query.version) || 0;
+  const material = v > 0 ? current.history?.[v - 1]?.data : current;
+  if (!material) return res.status(404).json({ error: '历史版本不存在' });
+
+  const md = materialMarkdown(material);
+  sendMd(res, md, `${material.topicTitle || '知识点'}-${material.depth || 'standard'}.md`);
+});
+
+app.get('/api/analyses/:id/report.md', (req, res) => {
+  const record = store.get(req.params.id);
+  if (!record?.report) return res.status(404).json({ error: '报告还没生成' });
+  sendMd(res, reportMarkdown(record.report, record), `${record.profile?.candidate?.name || '候选人'}-面试准备报告.md`);
 });
 
 /* ---------------- 静态资源 ---------------- */

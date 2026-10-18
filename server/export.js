@@ -2,6 +2,141 @@
 
 const nz = (s) => (s && String(s).trim() ? String(s).trim() : '—');
 
+const DEPTH_LABEL = { lite: '简单', standard: '中等', deep: '深度' };
+
+/** 单篇知识点资料 → Markdown（可单独下载） */
+export function materialMarkdown(m, index = 0) {
+  const lines = [];
+  const push = (...xs) => lines.push(...xs);
+
+  push(`# ${m.topicTitle}`, '');
+  const meta = [];
+  if (m.depth) meta.push(`- 深度：${DEPTH_LABEL[m.depth] || m.depth}`);
+  if (m.level) meta.push(`- 难度：${m.level}`);
+  if (m.group) meta.push(`- 分组：${m.group}`);
+  if (m.priority) meta.push(`- 重要度：${'★'.repeat(m.priority)}`);
+  if (m.createdAt) meta.push(`- 生成时间：${new Date(m.createdAt).toLocaleString('zh-CN')}`);
+  if (meta.length) push(...meta, '');
+
+  if (m.oneLine) push(`> ${m.oneLine}`, '');
+
+  if (m.core?.length) {
+    push('## 必须记住', '');
+    m.core.forEach((x) => push(`- ${x}`));
+    push('');
+  }
+  if (m.principle) push('## 原理讲透', '', m.principle, '');
+  if (m.resumeHook) push('## 简历入口', '', m.resumeHook, '');
+  if (m.answerFramework?.length) {
+    push('## 答题框架', '');
+    m.answerFramework.forEach((s, i) => push(`${i + 1}. **${nz(s.step)}**${s.say ? `：${s.say}` : ''}`));
+    push('');
+  }
+  if (m.followups?.length) {
+    push('## 追问与应答', '');
+    m.followups.forEach((f) => {
+      push(`- **问**：${f.q}`);
+      if (f.a) push(`  - **答**：${f.a}`);
+      if (f.trap) push(`  - ⚠️ 坑：${f.trap}`);
+    });
+    push('');
+  }
+  if (m.pitfalls?.length) {
+    push('## 易错点', '');
+    m.pitfalls.forEach((x) => push(`- ${x}`));
+    push('');
+  }
+  if (m.bonus?.length) {
+    push('## 加分项', '');
+    m.bonus.forEach((x) => push(`- ${x}`));
+    push('');
+  }
+  if (m.drill?.question) {
+    push('## 自测', '', `> ${m.drill.question}`, '');
+    if (m.drill.hint) push(`提示：${m.drill.hint}`, '');
+  }
+  if (m.references?.length) {
+    push('## 延伸阅读', '');
+    m.references.forEach((r) => push(`- ${r.title}${r.note ? `（${r.note}）` : ''}`));
+    push('');
+  }
+  if (m.sources?.length) {
+    push('## 参考来源', '');
+    m.sources.forEach((s, i) => {
+      const label = `${i + 1}. ${s.title || '来源'}`;
+      push(s.url ? `- [${label}](${s.url})` : `- ${label}`);
+    });
+    push('');
+  }
+  if (index) push('---', '');
+  return lines.join('\n');
+}
+
+/** 面试准备报告 → Markdown */
+export function reportMarkdown(report, record) {
+  const lines = [];
+  const push = (...xs) => lines.push(...xs);
+  const name = record?.profile?.candidate?.name || '候选人';
+
+  push(`# ${name} · ${record?.targetRole || ''} 面试准备报告`, '');
+  push(`> ${nz(report.headline)}`, '');
+  push(
+    `- 岗位匹配：${nz(report.verdict?.fit)}　- 通过概率：${nz(report.verdict?.passProbability)}　- 报告深度：${DEPTH_LABEL[report.depth] || '中等'}`,
+    '',
+  );
+  if (report.verdict?.summary) push(report.verdict.summary, '');
+
+  if (report.strengths?.length) {
+    push('## 能打的点', '');
+    report.strengths.forEach((s) => push(`- ${s}`));
+    push('');
+  }
+  if (report.gaps?.length) {
+    push('## 致命短板', '');
+    report.gaps.forEach((g, i) => {
+      push(`${i + 1}. **${nz(g.point)}**`);
+      if (g.impact) push(`   - 影响：${g.impact}`);
+      if (g.fix) push(`   - 怎么补：${g.fix}`);
+    });
+    push('');
+  }
+  if (report.modules?.length) {
+    push('## 学习模块（按优先级）', '');
+    push('| 顺序 | 模块 | 优先级 | 预计投入 | 为什么先学 |', '| --- | --- | --- | --- | --- |');
+    report.modules.forEach((m) => {
+      push(`| ${m.order} | ${m.title} | ${'★'.repeat(m.priority)} | ${nz(m.hours)} | ${nz(m.why)} |`);
+    });
+    push('');
+  }
+  if (report.path?.length) {
+    push('## 分阶段路径', '');
+    report.path.forEach((p) => {
+      push(`### ${nz(p.phase)}｜${nz(p.goal)}`, '');
+      (p.items || []).forEach((it) => push(`- [ ] ${it}`));
+      push('');
+    });
+  }
+  if (report.interviewSim?.length) {
+    push('## 各轮面试预演', '');
+    report.interviewSim.forEach((r) => {
+      push(`### ${nz(r.round)}`, '');
+      if (r.focus?.length) push(`- 考察重点：${r.focus.join('；')}`);
+      (r.typicalQuestions || []).forEach((q) => push(`- 可能被问：${q}`));
+      push('');
+    });
+  }
+  if (report.sources?.length) {
+    push('## 参考来源', '');
+    report.sources.forEach((s, i) => {
+      const label = `${i + 1}. ${s.title || '来源'}`;
+      push(s.url ? `- [${label}](${s.url})` : `- ${label}${s.note ? `（${s.note}）` : ''}`);
+    });
+    push('');
+  }
+  push('---', '', '_由 Interview Forge 生成 · 结论供参考，请结合真实经历核对_');
+  return lines.join('\n');
+}
+
 export function toMarkdown(record) {
   const p = record.profile || {};
   const c = p.candidate || {};
@@ -81,48 +216,11 @@ export function toMarkdown(record) {
   if (materials.length) {
     push('## 三、知识点复习资料', '');
     materials.forEach((m, idx) => {
+      const body = materialMarkdown(m).split('\n');
+      const start = body.findIndex((l) => l.startsWith('## '));
       push(`### ${idx + 1}. ${m.topicTitle}`, '');
-      if (m.oneLine) push(`**一句话本质**：${m.oneLine}`, '');
-      if (m.core?.length) {
-        push('**必须记住**', '');
-        m.core.forEach((x) => push(`- ${x}`));
-        push('');
-      }
-      if (m.principle) push('**原理讲透**', '', m.principle, '');
-      if (m.resumeHook) push(`**简历入口**：${m.resumeHook}`, '');
-      if (m.answerFramework?.length) {
-        push('**答题框架**', '');
-        m.answerFramework.forEach((s, i) => push(`${i + 1}. **${nz(s.step)}**${s.say ? `：${s.say}` : ''}`));
-        push('');
-      }
-      if (m.followups?.length) {
-        push('**追问与应答**', '');
-        m.followups.forEach((f) => {
-          push(`- **问**：${f.q}`);
-          if (f.a) push(`  - **答**：${f.a}`);
-          if (f.trap) push(`  - ⚠️ 坑：${f.trap}`);
-        });
-        push('');
-      }
-      if (m.pitfalls?.length) {
-        push('**易错点**', '');
-        m.pitfalls.forEach((x) => push(`- ${x}`));
-        push('');
-      }
-      if (m.bonus?.length) {
-        push('**加分项**', '');
-        m.bonus.forEach((x) => push(`- ${x}`));
-        push('');
-      }
-      if (m.drill?.question) {
-        push('**自测**', '', `> ${m.drill.question}`, '');
-        if (m.drill.hint) push(`提示：${m.drill.hint}`, '');
-      }
-      if (m.references?.length) {
-        push('**延伸阅读**', '');
-        m.references.forEach((r) => push(`- ${r.title}${r.note ? `（${r.note}）` : ''}`));
-        push('');
-      }
+      // 去掉单篇里的 H1 与元信息，只保留正文
+      push(body.slice(start >= 0 ? start : 0).join('\n'), '');
       push('---', '');
     });
   }
@@ -180,6 +278,24 @@ export function toMarkdown(record) {
       push('');
     }
     if (record.plan.nextRound) push(`### 下一轮验收标准`, '', record.plan.nextRound, '');
+  }
+
+  /* ---------- 面试准备报告 ---------- */
+  if (record.report) {
+    push('## 六、面试准备报告', '');
+    push(`> ${nz(record.report.headline)}`, '');
+    if (record.report.verdict?.summary) push(record.report.verdict.summary, '');
+    if (record.report.modules?.length) {
+      push('### 学习模块（按优先级）', '');
+      push('| 顺序 | 模块 | 优先级 | 预计投入 | 为什么先学 |', '| --- | --- | --- | --- | --- |');
+      record.report.modules.forEach((m) => push(`| ${m.order} | ${m.title} | ${'★'.repeat(m.priority)} | ${nz(m.hours)} | ${nz(m.why)} |`));
+      push('');
+    }
+    if (record.report.sources?.length) {
+      push('### 参考来源', '');
+      record.report.sources.forEach((s, i) => push(s.url ? `- [${i + 1}. ${nz(s.title)}](${s.url})` : `- ${i + 1}. ${nz(s.title)}`));
+      push('');
+    }
   }
 
   push('', '---', '', '_由 Interview Forge 生成 · 内容供复习参考，请结合真实项目经历核对_');

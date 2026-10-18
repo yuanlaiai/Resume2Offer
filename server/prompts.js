@@ -21,6 +21,74 @@ const ROLE_ADAPT = `先判断目标岗位属于哪类（技术研发 / 算法数
 - 运营增长：策略拆解、渠道效率、内容/活动 ROI、复盘能力；
 - 非技术岗：方法论、案例细节、结果量化、行业理解。`;
 
+/** 资料深度的三档规格 */
+export const DEPTHS = {
+  lite: {
+    label: '简单',
+    guide: `【深度：简单】读者时间紧，只想要能立刻背走的东西。
+- principle 只写 120~180 字，讲清"是什么 + 为什么"，不要展开历史与源码；
+- core 3 条，followups 2 组，pitfalls 2 条，bonus 1 条；
+- answerFramework 3 步，每步一句话；
+- 不写延伸阅读（references 给空数组）。`,
+    maxTokens: 2200,
+  },
+  standard: {
+    label: '中等',
+    guide: `【深度：中等】标准和默认档：原理讲透到能应对一轮技术面。
+- principle 300~500 字，要有因果链和适用边界；
+- core 4 条，followups 3 组，pitfalls 3 条，bonus 2 条；
+- answerFramework 4 步；
+- references 2~3 条真实资料。`,
+    maxTokens: 3400,
+  },
+  deep: {
+    label: '深度',
+    guide: `【深度：深度】目标是能在压力面里扛住连续追问，甚至反向输出。
+- principle 600~900 字，写到实现机制层面（数据结构、关键参数、瓶颈在哪、什么情况下会失效）；
+- 必须包含至少一组对比选型（A 方案 vs B 方案，各自在什么场景更优）；
+- core 5 条，followups 4 组（含一个"如果…会怎样"的假设题），pitfalls 4 条，bonus 3 条；
+- answerFramework 5 步，最后一步给出"主动收尾/反问"的话术；
+- references 3~5 条真实资料。`,
+    maxTokens: 5200,
+  },
+};
+
+export function depthSpec(depth) {
+  return DEPTHS[depth] || DEPTHS.standard;
+}
+
+/** 上传简历后，快速推断「该投什么岗位」——用于前端自动填充 */
+export function prefillPrompt({ resumeText }) {
+  return [
+    {
+      role: 'system',
+      content: `${INTERVIEWER}
+现在只做一件事：扫一眼这份简历，判断这个人下一步最该投什么岗位。不要写评语，不要客套。
+${JSON_RULE}
+
+JSON 结构：
+{
+  "roles": [
+    {"title": "岗位名称（写招聘网站上的真实叫法）", "level": "初级/中级/高级/专家/管理", "fitScore": 0-100, "reason": "一句话：凭什么匹配"}
+  ],
+  "level": "整体最合适的级别",
+  "headline": "一句话概括这个人（不超过 30 字）",
+  "keywords": ["简历里最能打的 4-6 个关键词"]
+}
+
+要求：
+- roles 给 2-3 个，按匹配度降序；第一个是主推岗位。
+- 岗位名要具体，写"AI 应用开发工程师"，不要写"技术岗"。
+- 全文中文。`,
+    },
+    {
+      role: 'user',
+      content: `【简历原文】\n${resumeText.slice(0, 6000)}`,
+    },
+  ];
+}
+
+
 export function parseResumePrompt({ resumeText, targetRole, level }) {
   return [
     {
@@ -109,7 +177,8 @@ ${JSON.stringify(profile, null, 2)}
   ];
 }
 
-export function buildMaterialPrompt({ profile, topic, group, targetRole, searchBlock }) {
+export function buildMaterialPrompt({ profile, topic, group, targetRole, searchBlock, depth = 'standard' }) {
+  const spec = depthSpec(depth);
   return [
     {
       role: 'system',
@@ -119,13 +188,15 @@ ${ROLE_ADAPT}
 现在你要为「一个具体知识点」写一份可以直接拿去面试的复习资料。读者是简历上写着这个技能的候选人本人。
 不是写百科词条，是写「内部面试官带人复习的笔记」：先讲透原理，再教怎么答，最后点出会被追问到哪里。
 
+${spec.guide}
+
 ${JSON_RULE}
 
 JSON 结构：
 {
   "oneLine": "一句话说清它的本质（不超过 40 字，要精准，不要营销腔）",
   "core": ["3-5 条必须记住的结论，每条一句话，带具体数字或边界条件"],
-  "principle": "把原理讲透，300-500 字，可用 markdown（**加粗**、- 列表、\`代码\`）。要有因果链：为什么这样设计、不这样会怎样",
+  "principle": "把原理讲透，可用 markdown（**加粗**、- 列表、\`代码\`）。要有因果链：为什么这样设计、不这样会怎样",
   "resumeHook": "简历里哪句话/哪段经历会引出这个问题，以及面试官为什么会顺着这句问",
   "answerFramework": [{"step": "第 1 步：先给结论", "say": "可以直接说出口的话，口语化，20-60 字"}],
   "followups": [{"q": "面试官的追问", "a": "怎么答（口语化，讲清关键点）", "trap": "这题埋的坑/答错会暴露什么"}],
@@ -139,6 +210,7 @@ JSON 结构：
 - answerFramework 3-5 步，形成一套能背下来就敢开口的结构，不要说"要结合实际"这种空话。
 - followups 2-4 组，必须是真的会连环追问的问题。
 - references 只写你确定真实存在的资料；不确定就给空数组，绝对不要编书名。
+${searchBlock ? '- 参考资料里有编号 [1][2]，正文中用到某条时在句末标注对应编号，便于读者溯源。' : ''}
 - 全部中文，术语保留英文原文。`,
     },
     {
@@ -146,15 +218,78 @@ JSON 结构：
       content: `【候选人背景】${profile?.summary || ''}
 【目标岗位】${targetRole || ''}
 【所属分组】${group || ''}（${topic?.reason || ''}）
+【本次深度】${spec.label}
 
 【要写的知识点】${topic?.title}
 【难度】${topic?.level}　【重要度】${topic?.priority}/5
 【面试官关注】${topic?.interviewerFocus || ''}
 【预设追问】${(topic?.followups || []).join(' / ')}
 ${searchBlock ? `\n【联网检索到的参考资料】\n${searchBlock}\n\n以上是真实世界的资料片段：可以用来补充行业实践、最新动态和具体案例，但必须消化后用自己的话重写；与常识矛盾时以你的专业判断为准；不确定的内容宁可不写，禁止照抄原文。` : ''}`,
-  },
+    },
   ];
 }
+
+/** 综合报告：汇总简历、知识点、已生成资料与检索结果，输出一份可下载的面试准备报告 */
+export function buildReportPrompt({ profile, topics, materials, targetRole, level, depth = 'standard', searchBlock }) {
+  const spec = depthSpec(depth);
+  const done = (materials || []).filter((m) => !m.error).map((m) => ({
+    title: m.topicTitle,
+    depth: m.depth || 'standard',
+    oneLine: m.oneLine,
+    core: (m.core || []).slice(0, 3),
+  }));
+
+  return [
+    {
+      role: 'system',
+      content: `${INTERVIEWER}
+${ROLE_ADAPT}
+
+现在你要输出一份「面试准备报告」：候选人拿去就能知道——我现在的水平、会被问什么、先学什么、怎么排时间。
+这不是资料合集，是判断与决策：要有结论、有排序、有理由，不要罗列知识点。
+
+${spec.guide}
+
+${JSON_RULE}
+
+JSON 结构：
+{
+  "headline": "一句话诊断：这个人现在去面会卡在哪（不超过 40 字）",
+  "verdict": {"fit": "匹配|偏弱|超配", "passProbability": "高|中|低", "summary": "3-4 句话：整体判断 + 最大风险 + 最大机会"},
+  "strengths": ["面试中真正能打的 3-4 个点，要具体到经历"],
+  "gaps": [{"point": "致命短板", "impact": "会怎么影响面试结果", "fix": "怎么补，具体动作"}],
+  "modules": [
+    {"topicId": "t1", "title": "模块名", "priority": 1, "order": 1, "why": "为什么必须学", "hours": "预计投入", "depth": "简单|中等|深度"}
+  ],
+  "path": [{"phase": "第 1 阶段（D1-D2）", "goal": "这一阶段要达成什么", "items": ["具体动作"]}],
+  "interviewSim": [{"round": "一面 / 二面 / HR 面", "focus": ["这一轮考什么"], "typicalQuestions": ["最可能被问的 3 个问题"]}],
+  "sources": [{"title": "真实存在的资料或文章标题", "url": "", "note": "用来支撑哪个结论"}]
+}
+
+要求：
+- modules 按优先级排序（order 从 1 开始），覆盖全部知识点，但只在前 5 个上写"为什么必须学"的细节。
+- path 分 2-3 个阶段，动作要能在下班后完成。
+- sources 只写你能确认存在的资料，不确定就给空数组，绝不编造链接。
+- 全文中文。`,
+    },
+    {
+      role: 'user',
+      content: `【候选人档案】
+${JSON.stringify(profile, null, 2).slice(0, 5000)}
+
+【目标岗位】${targetRole || ''}${level ? `（${level}）` : ''}
+【本次报告深度】${spec.label}
+
+【知识点清单（按重要度）】
+${(topics || []).map((t) => `- ${t.id} ${t.title}（${t.level}，重要度${t.priority}${t.gap ? '，简历缺口' : ''}，分组：${t.group || '-'}）`).join('\n')}
+
+【已生成的复习资料要点】
+${done.length ? JSON.stringify(done, null, 2) : '（尚未生成资料，请基于知识点清单给出学习顺序）'}
+${searchBlock ? `\n【联网检索到的参考资料】\n${searchBlock}\n\n引用时在结论后标注 [编号]；不要照抄原文。` : ''}`,
+    },
+  ];
+}
+
 
 export function expandTopicsPrompt({ profile, topic, existingTitles, targetRole, searchBlock, count = 4 }) {
   return [
