@@ -16,8 +16,11 @@ export const config = {
   maxUploadMb: 10,
   demo: process.env.DEMO_MODE === '1',
   search: {
+    // tavily | bocha | brave | serper | searxng | custom
+    provider: (process.env.SEARCH_PROVIDER || 'tavily').trim().toLowerCase(),
     apiKey: (process.env.SEARCH_API_KEY || '').trim(),
-    endpoint: (process.env.SEARCH_ENDPOINT || 'https://api.tavily.com/search').trim(),
+    // 留空则按 provider 取默认地址（searxng 需自己填实例地址）
+    endpoint: (process.env.SEARCH_ENDPOINT || '').trim(),
     timeoutMs: num(process.env.SEARCH_TIMEOUT_MS, 15000),
   },
   llm: {

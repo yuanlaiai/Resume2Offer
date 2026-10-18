@@ -92,8 +92,9 @@ npm start
 | `LLM_TEMPERATURE` | `0.4` | 生成温度 |
 | `LLM_MAX_TOKENS` | `4096` | 单次回复上限，资料类建议 ≥ 3000 |
 | `LLM_TIMEOUT_MS` | `120000` | 单次请求超时 |
-| `SEARCH_API_KEY` | — | 可选。联网检索增强（Tavily 兼容），配置后拓展知识点 / 生成资料会先检索真实资料注入给模型 |
-| `SEARCH_ENDPOINT` | `https://api.tavily.com/search` | 检索接口地址 |
+| `SEARCH_PROVIDER` | `tavily` | 可选。检索服务商：`tavily` / `bocha` / `brave` / `serper` / `searxng` / `custom` |
+| `SEARCH_API_KEY` | — | 可选。检索 Key。配置后拓展知识点 / 生成资料会先检索真实资料注入给模型；`searxng` 自建实例不需要 |
+| `SEARCH_ENDPOINT` | 按 provider 取默认 | 自定义检索地址（自建 searxng、私有网关时用） |
 | `PORT` | `8787` | 服务端口 |
 | `DATA_DIR` | `./data` | 数据目录（JSON 文件） |
 | `DEMO_MODE` | `0` | `1` 时不调用模型，用内置样例数据 |
@@ -116,7 +117,7 @@ interview-forge/
 │   ├── pipeline.js   # 六段生成流水线（解析→知识点→资料→测验→复盘→拓展→计划）
 │   ├── prompts.js    # 全部提示词（产品的"大脑"，欢迎 PR 调优）
 │   ├── llm.js        # OpenAI 兼容客户端：重试 / JSON 修复 / 超时
-│   ├── search.js     # 可选联网检索增强（Tavily 兼容）
+│   ├── search.js     # 可选联网检索增强（多家服务商可切换，不绑定 Tavily）
 │   ├── mock.js       # 演示模式样例数据
 │   ├── extract.js    # PDF / DOCX / TXT 文本抽取
 │   ├── jobs.js       # 内存任务队列 + 进度上报
@@ -176,6 +177,10 @@ CI 会在 Node 20 / 22 上自动执行以上流程。
 
 **Q：和"AI 面试题库"有什么区别？**
 题库是题目的集合；这是围绕"你这份简历会被怎么审"生成的复习系统——知识点、资料、题目、复盘全部由你的简历和目标岗位动态生成。
+
+**Q：必须配 Tavily 才能联网吗？**
+不需要，也完全可以不联网。`SEARCH_PROVIDER` 支持 `tavily` / `bocha` / `brave` / `serper` / `searxng` / `custom` 六种，配任意一家即可；一个都不配也能跑完整流程，只是知识点和资料完全基于模型自身知识（计算机基础、系统设计这类变化慢的内容影响很小，最新框架/岗位行情才有差距）。
+国内网络建议用 `bocha`（直连、中文好）或自建 `searxng`（免费）；`tavily` 是默认值，胜在结果已经清洗成适合喂模型的正文片段。
 
 **Q：支持多用户吗？**
 当前版本面向个人自托管（无账号体系），适合自己用或团队内部部署一个实例。多用户支持在 Roadmap 里。

@@ -29,6 +29,9 @@ jobs:
             node --check "$f"
           done
 
+      - name: 检索适配器自测（六家服务商解析 + 失败降级）
+        run: node scripts/search-adapters.mjs
+
       - name: 启动演示模式
         run: |
           DEMO_MODE=1 PORT=8899 node server/index.js &

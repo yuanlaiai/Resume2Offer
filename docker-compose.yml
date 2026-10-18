@@ -9,6 +9,10 @@ services:
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
       - DEMO_MODE=${DEMO_MODE:-0}
+      # 可选：联网检索增强，任选一家（tavily / bocha / brave / serper / searxng / custom）
+      - SEARCH_PROVIDER=${SEARCH_PROVIDER:-tavily}
+      - SEARCH_API_KEY=${SEARCH_API_KEY}
+      - SEARCH_ENDPOINT=${SEARCH_ENDPOINT}
     volumes:
       - ./data:/app/data
     restart: unless-stopped

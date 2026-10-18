@@ -429,7 +429,7 @@ export async function runExpand(ctx, { analysisId, topicId, count = 4 }) {
     searchBlock = formatSearchBlock(results);
     ctx.note(searchBlock ? '已注入联网检索结果' : '联网检索未命中，改用模型知识');
   } else {
-    ctx.note('未配置联网检索，使用模型知识拓展（可在 .env 配置 SEARCH_API_KEY）');
+    ctx.note('未配置联网检索，使用模型知识拓展（.env 里配 SEARCH_PROVIDER + SEARCH_API_KEY 即可开启）');
   }
 
   ctx.step(1, '生成关联考点');

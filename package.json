@@ -21,7 +21,8 @@
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "demo": "DEMO_MODE=1 node server/index.js",
-    "check": "node --check server/index.js && node --check server/pipeline.js && node --check public/app.js"
+    "check": "node --check server/index.js && node --check server/pipeline.js && node --check public/app.js",
+    "test:search": "node scripts/search-adapters.mjs"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
