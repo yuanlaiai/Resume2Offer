@@ -30,7 +30,7 @@ export const DEPTHS = {
 - core 3 条，followups 2 组，pitfalls 2 条，bonus 1 条；
 - answerFramework 3 步，每步一句话；
 - 不写延伸阅读（references 给空数组）。`,
-    maxTokens: 2200,
+    maxTokens: 3200,
   },
   standard: {
     label: '中等',
@@ -39,7 +39,7 @@ export const DEPTHS = {
 - core 4 条，followups 3 组，pitfalls 3 条，bonus 2 条；
 - answerFramework 4 步；
 - references 2~3 条真实资料。`,
-    maxTokens: 3400,
+    maxTokens: 4800,
   },
   deep: {
     label: '深度',
@@ -49,7 +49,7 @@ export const DEPTHS = {
 - core 5 条，followups 4 组（含一个"如果…会怎样"的假设题），pitfalls 4 条，bonus 3 条；
 - answerFramework 5 步，最后一步给出"主动收尾/反问"的话术；
 - references 3~5 条真实资料。`,
-    maxTokens: 5200,
+    maxTokens: 7200,
   },
 };
 

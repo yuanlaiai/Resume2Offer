@@ -98,8 +98,9 @@ npm start
 | `LLM_API_KEY` | — | API Key |
 | `LLM_MODEL` | `gpt-4o-mini` | 模型名 |
 | `LLM_TEMPERATURE` | `0.4` | 生成温度 |
-| `LLM_MAX_TOKENS` | `4096` | 单次回复上限，资料类建议 ≥ 3000 |
-| `LLM_TIMEOUT_MS` | `120000` | 单次请求超时 |
+| `LLM_MAX_TOKENS` | `8192` | 单次回复上限。推理型模型（deepseek-flash、o 系列）思考也占 token，给小了 JSON 会被截断 |
+| `LLM_REASONING_EFFORT` | 空 | 推理强度 `low` / `high` / `max`，仅推理型模型支持。填 `low` 更快更省、更少截断；留空则不发送 |
+| `LLM_TIMEOUT_MS` | `180000` | 单次请求超时。推理模型首字很慢，建议别低于 180 秒 |
 | `SEARCH_PROVIDER` | `tavily` | 可选。检索服务商：`tavily` / `bocha` / `brave` / `serper` / `searxng` / `custom` |
 | `SEARCH_API_KEY` | — | 可选。检索 Key。配置后拓展知识点 / 生成资料会先检索真实资料注入给模型；`searxng` 自建实例不需要 |
 | `SEARCH_ENDPOINT` | 按 provider 取默认 | 自定义检索地址（自建 searxng、私有网关时用） |
@@ -198,6 +199,14 @@ CI 会在 Node 20 / 22 上自动执行以上流程。
 **Q：必须配 Tavily 才能联网吗？**
 不需要，也完全可以不联网。`SEARCH_PROVIDER` 支持 `tavily` / `bocha` / `brave` / `serper` / `searxng` / `custom` 六种，配任意一家即可；一个都不配也能跑完整流程，只是知识点和资料完全基于模型自身知识（计算机基础、系统设计这类变化慢的内容影响很小，最新框架/岗位行情才有差距）。
 国内网络建议用 `bocha`（直连、中文好）或自建 `searxng`（免费）；`tavily` 是默认值，胜在结果已经清洗成适合喂模型的正文片段。
+
+**Q：报错「模型没有返回可解析的 JSON」怎么办？**
+这是模型输出被截断或格式坏掉了，不是你的简历有问题。最常见原因是用了**推理型模型**（如 `deepseek-flash`）：它先"思考"再回答，思考同样消耗 `max_tokens`，额度不够时正文只剩半截 JSON。
+
+现在程序会自动处理：识别出截断后**自动翻倍 `max_tokens` 重试**（最多 3 次），空正文、裸换行、尾逗号也会就地修复，仍失败才报错。想彻底少踩这个坑：
+- `.env` 里设 `LLM_REASONING_EFFORT=low`（结构化输出够用，快很多也省很多）
+- `LLM_MAX_TOKENS` 不要低于 `8192`
+- 一次生成的知识点别太多（可分批生成）
 
 **Q：支持多用户吗？**
 当前版本面向个人自托管（无账号体系），适合自己用或团队内部部署一个实例。多用户支持在 Roadmap 里。

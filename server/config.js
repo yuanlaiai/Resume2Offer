@@ -28,8 +28,10 @@ export const config = {
     apiKey: (process.env.LLM_API_KEY || '').trim(),
     model: process.env.LLM_MODEL || 'gpt-4o-mini',
     temperature: num(process.env.LLM_TEMPERATURE, 0.4),
-    maxTokens: num(process.env.LLM_MAX_TOKENS, 4096),
-    timeoutMs: num(process.env.LLM_TIMEOUT_MS, 120000),
+    maxTokens: num(process.env.LLM_MAX_TOKENS, 8192),
+    // 推理型模型（deepseek-flash / o 系列等）可选：low | high | max，留空则不发送该参数
+    reasoningEffort: (process.env.LLM_REASONING_EFFORT || '').trim().toLowerCase(),
+    timeoutMs: num(process.env.LLM_TIMEOUT_MS, 180000),
   },
 };
 

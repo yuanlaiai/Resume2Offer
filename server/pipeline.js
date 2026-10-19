@@ -170,7 +170,7 @@ export async function runAnalyze(ctx, { resumeText, targetRole, level, fileName 
   const finalRole = targetRole || profile.targetRole.title;
   const topicsRaw = await chatJSON(
     buildTopicsPrompt({ profile, targetRole: finalRole, level }),
-    { temperature: 0.35, maxTokens: 4000 },
+    { temperature: 0.35, maxTokens: 7000 },
   );
   const groups = normalizeGroups(topicsRaw);
   if (!groups.length) throw new Error('没有生成出知识点，请重试或换一个模型');
