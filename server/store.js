@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from './config.js';
+import { fixFileName } from './filename.js';
 
 /**
  * 极简 JSON 文件存储：一整个 db.json 放内存里，改完原子落盘。
@@ -12,6 +13,8 @@ const DB_FILE = path.join(config.dataDir, 'db.json');
 let db = { analyses: {}, meta: { version: 1 } };
 let queue = Promise.resolve();
 
+let healed = 0;
+
 function load() {
   try {
     fs.mkdirSync(config.dataDir, { recursive: true });
@@ -20,12 +23,24 @@ function load() {
       const parsed = JSON.parse(raw);
       db = { analyses: {}, meta: { version: 1 }, ...parsed };
       db.analyses = db.analyses || {};
+      // 老版本把中文文件名存成了 latin1 乱码，启动时一次性修好
+      for (const rec of Object.values(db.analyses)) {
+        const fixed = fixFileName(rec.fileName);
+        if (fixed !== rec.fileName) {
+          rec.fileName = fixed;
+          healed += 1;
+        }
+      }
     }
   } catch (err) {
     console.error('[store] 读取失败，使用空库：', err.message);
   }
 }
 load();
+if (healed) {
+  console.log(`[store] 已修复 ${healed} 条记录的乱码文件名`);
+  persist();
+}
 
 function persist() {
   // 串行化写入，先写临时文件再 rename，避免半截文件

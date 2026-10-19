@@ -7,6 +7,7 @@ import { config, llmReady, ROOT } from './config.js';
 import { store } from './store.js';
 import { startJob, getJob } from './jobs.js';
 import { extractResume, normalizeText } from './extract.js';
+import { fixFileName } from './filename.js';
 import { describeLLM, LLMError } from './llm.js';
 import { runAnalyze, runMaterials, runQuiz, runGrade, runPlan, runExpand, runReport, prefillRole } from './pipeline.js';
 import { toMarkdown, materialMarkdown, reportMarkdown } from './export.js';
@@ -63,7 +64,7 @@ app.post('/api/prefill', upload.single('resume'), async (req, res, next) => {
     if (req.file) {
       const parsed = await extractResume({
         buffer: req.file.buffer,
-        filename: req.file.originalname,
+        filename: fixFileName(req.file.originalname),
         mimetype: req.file.mimetype,
       });
       resumeText = parsed.text;
@@ -94,11 +95,11 @@ app.post('/api/analyze', upload.single('resume'), async (req, res, next) => {
     if (req.file) {
       const parsed = await extractResume({
         buffer: req.file.buffer,
-        filename: req.file.originalname,
+        filename: fixFileName(req.file.originalname),
         mimetype: req.file.mimetype,
       });
       resumeText = parsed.text;
-      fileName = req.file.originalname;
+      fileName = fixFileName(req.file.originalname);
     } else if (req.body?.text) {
       resumeText = normalizeText(req.body.text).slice(0, 30000);
       fileName = '粘贴的文本';

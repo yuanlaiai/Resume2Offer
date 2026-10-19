@@ -24,7 +24,8 @@
     "check": "node --check server/index.js && node --check server/pipeline.js && node --check public/app.js",
     "test:search": "node scripts/search-adapters.mjs",
     "test:llm": "node scripts/llm-guard.mjs",
-    "test": "node scripts/llm-guard.mjs && node scripts/search-adapters.mjs"
+    "test": "node scripts/filename.mjs && node scripts/llm-guard.mjs && node scripts/search-adapters.mjs",
+    "test:filename": "node scripts/filename.mjs"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
