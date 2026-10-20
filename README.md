@@ -1,6 +1,6 @@
 <div align="center">
 
-# Interview Forge
+# Resume2Offer
 
 **简历驱动的 AI 面试复习教练**
 
@@ -19,7 +19,7 @@
 ## 这是什么
 
 市面上大多数「AI 面试题库」是通用的：所有人刷一样的八股。
-Interview Forge 反过来——**从你的简历出发**，模拟一个面过上千人的面试官会怎么审你这份简历：
+Resume2Offer 反过来——**从你的简历出发**，模拟一个面过上千人的面试官会怎么审你这份简历：
 
 - 你简历里写的每个技术点，都可能被深挖；
 - 你没写但目标岗位需要的，是隐藏考察项；
@@ -54,7 +54,7 @@ Interview Forge 反过来——**从你的简历出发**，模拟一个面过上
 
 ### 系统课程：每个技术大类一门「从入门到精通」
 
-散装的考点卡只适合速查，系统性复习需要课程。Interview Forge 会为简历里的**每个技术大类单独排一门课**（Java 一门、Kubernetes 一门……）：
+散装的考点卡只适合速查，系统性复习需要课程。Resume2Offer 会为简历里的**每个技术大类单独排一门课**（Java 一门、Kubernetes 一门……）：
 
 - **4 阶段 8-14 章**：入门（建立心智模型）→ 进阶（原理、边界与坑）→ 实战（绑你简历里的项目与线上排障）→ 精通（选型对比、机制/源码、压力面追问）
 - **每章都有结构**：学习目标、先修章节、面试会怎么问、预计时长、可自检的通关标准
@@ -88,8 +88,8 @@ Interview Forge 反过来——**从你的简历出发**，模拟一个面过上
 需要 **Node.js ≥ 20**。
 
 ```bash
-git clone https://github.com/<your-name>/interview-forge.git
-cd interview-forge
+git clone https://github.com/<your-name>/resume2offer.git
+cd resume2offer
 npm install
 
 # 方式一：先看看长什么样（无需 API Key）
@@ -163,8 +163,8 @@ npm start
 ```bash
 docker compose up -d
 # 或手动构建
-docker build -t interview-forge .
-docker run -p 8787:8787 -v ./data:/app/data --env-file .env interview-forge
+docker build -t resume2offer .
+docker run -p 8787:8787 -v ./data:/app/data --env-file .env resume2offer
 ```
 
 镜像自带 `HEALTHCHECK`，数据挂载在 `/app/data`，重启不丢历史记录。
@@ -172,7 +172,7 @@ docker run -p 8787:8787 -v ./data:/app/data --env-file .env interview-forge
 ## 项目结构
 
 ```
-interview-forge/
+resume2offer/
 ├── server/
 │   ├── index.js      # Express 路由、静态资源版本号、端口自检
 │   ├── config.js     # 环境变量收敛与默认值

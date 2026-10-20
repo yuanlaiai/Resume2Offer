@@ -133,7 +133,7 @@ export function reportMarkdown(report, record) {
     });
     push('');
   }
-  push('---', '', '_由 Interview Forge 生成 · 结论供参考，请结合真实经历核对_');
+  push('---', '', '_由 Resume2Offer 生成 · 结论供参考，请结合真实经历核对_');
   return lines.join('\n');
 }
 
@@ -330,7 +330,7 @@ export function toMarkdown(record) {
     });
   }
 
-  push('', '---', '', '_由 Interview Forge 生成 · 内容供复习参考，请结合真实项目经历核对_');
+  push('', '---', '', '_由 Resume2Offer 生成 · 内容供复习参考，请结合真实项目经历核对_');
   return lines.join('\n');
 }
 

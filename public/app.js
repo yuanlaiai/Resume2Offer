@@ -1,4 +1,4 @@
-/* Interview Forge — 前端（零依赖，原生 JS） */
+/* Resume2Offer — 前端（零依赖，原生 JS） */
 
 const $app = document.getElementById('app');
 const $topRight = document.getElementById('topbar-right');
@@ -237,7 +237,7 @@ function renderHome() {
   $app.innerHTML = `
     <section class="hero">
       <div>
-        <div class="eyebrow">Interview Forge</div>
+        <div class="eyebrow">Resume2Offer</div>
         <h1 class="hero-title">把简历变成一套<br /><em>能背下来</em>的面试答案</h1>
         <p class="hero-sub">上传简历，AI 用面试官的视角拆出你真正会被问到的知识点，生成能直接开口说的复习资料，再出题考你、给你打分、指出下一步。</p>
         <ul class="hero-points">

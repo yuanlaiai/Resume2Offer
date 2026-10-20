@@ -1,5 +1,5 @@
 services:
-  interview-forge:
+  resume2offer:
     build: .
     ports:
       - "8787:8787"

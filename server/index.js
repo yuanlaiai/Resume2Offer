@@ -379,7 +379,7 @@ app.use((err, req, res, next) => {
 app.listen(config.port, config.host, async () => {
   const url = `http://localhost:${config.port}`;
   console.log('');
-  console.log('  Interview Forge 已启动');
+  console.log('  Resume2Offer 已启动');
   console.log(`  → ${url}`);
   const lan = lanIPv4();
   if (lan && config.host === '0.0.0.0') {
@@ -428,7 +428,7 @@ async function probeSelf(port) {
     } catch {
       /* 非 JSON，继续判断 */
     }
-    return { ok: false, detail: `HTTP ${res.status}，响应内容不是 Interview Forge` };
+    return { ok: false, detail: `HTTP ${res.status}，响应内容不是 Resume2Offer` };
   } catch (err) {
     return { ok: false, detail: `探测失败：${err.message}` };
   }
