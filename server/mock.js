@@ -28,6 +28,14 @@ const PROFILE = {
     { name: 'Python', level: '了解', evidence: '编写检索评测脚本' },
     { name: 'Prompt 工程', level: '掌握', evidence: '沉淀 40+ 业务提示词模板' },
   ],
+  stack: [
+    { name: 'Java', alias: 'Spring Boot', category: '语言', level: '熟练', evidence: '主导订单中心重构，QPS 从 800 提升到 3200', mustReview: true },
+    { name: 'Kubernetes', alias: 'K8s', category: '云原生', level: '掌握', evidence: '负责 3 个服务的容器化与灰度发布', mustReview: true },
+    { name: 'MySQL', category: '数据库', level: '熟练', evidence: '设计分库分表方案，支撑单表 4 亿行', mustReview: true },
+    { name: 'Redis', category: '中间件', level: '熟练', evidence: '缓存命中率 96%', mustReview: true },
+    { name: '大模型应用', alias: 'RAG / Agent', category: 'AI 应用', level: '掌握', evidence: '搭建内部知识库问答，日均 1.2 万次调用', mustReview: true },
+    { name: 'Python', category: '语言', level: '了解', evidence: '编写检索评测脚本', mustReview: false },
+  ],
   experiences: [
     {
       company: '某电商科技公司',
@@ -845,6 +853,207 @@ function gradeMock(payload) {
   };
 }
 
+/* ---------------- 技能覆盖补齐（演示：Java / Kubernetes / Redis） ---------------- */
+
+const COVERAGE_TOPICS = (name, evidence) => [
+  {
+    title: `${name} 核心概念与知识地图`,
+    level: '基础',
+    priority: 5,
+    gap: false,
+    reason: `简历里写了${evidence ? `「${evidence}」` : ` ${name}`}，面试官会先确认你对它有没有整体认知。`,
+    interviewerFocus: '看你能不能画出边界：它解决什么问题、不解决什么问题。',
+    followups: [`${name} 在你们项目里承担什么角色？`, '为什么不用更简单的方案？'],
+  },
+  {
+    title: `${name} 关键机制与高频追问`,
+    level: '进阶',
+    priority: 4,
+    gap: false,
+    reason: `${name} 是简历里的实打实技能，面试会顺着项目连续追问机制细节。`,
+    interviewerFocus: '看你能不能从"会用"讲到"为什么这样设计"。',
+    followups: ['这个机制在什么条件下会失效？', '你怎么定位相关线上问题？'],
+  },
+  {
+    title: `${name} 项目落地与故障排查`,
+    level: '深度',
+    priority: 4,
+    gap: false,
+    reason: `简历项目里用过 ${name}，必须能讲清落地过程与一次真实排障。`,
+    interviewerFocus: '看有没有真实动手经验，以及能不能量化结果。',
+    followups: ['出过最严重的问题是什么？', '怎么证明优化有效？'],
+  },
+];
+
+function mockCoverage(names) {
+  return {
+    groups: names.map((name) => ({
+      name,
+      why: `简历里明确写了 ${name}，这是必须单独系统复习的一类。`,
+      topics: COVERAGE_TOPICS(name, ''),
+    })),
+  };
+}
+
+/* ---------------- 系统课程 ---------------- */
+
+function mockCourse(name) {
+  const group = TOPICS.find((g) => g.name === name);
+  const topics = group?.topics || [];
+  const pick = (i) => topics[i];
+
+  const chapter = (title, topic, level, hours = 2) => ({
+    title,
+    goal: topic ? `吃透「${topic.title}」并能接住两层追问` : `建立「${title}」的完整认知并能开口讲清`,
+    why: topic?.reason || `面试官会用这一章确认你对 ${name} 的掌握不是零散的。`,
+    level,
+    hours,
+    prereq: [],
+    keyQuestions: topic?.followups || [`${name} 在你们项目里怎么用的？`, '遇到过什么问题，怎么定位的？'],
+    checkpoints: [`能脱稿讲清「${title}」的机制、边界，并举一个项目例子`],
+    topicIds: topic ? [topic.id] : [],
+  });
+
+  const stages = [
+    {
+      name: '入门',
+      goal: `建立 ${name} 的整体心智模型，能说清它解决什么问题`,
+      chapters: [
+        chapter(`${name} 知识地图与最小可用`, pick(0), '基础'),
+        chapter(`${name} 常用工具链与上手路径`, pick(1), '基础'),
+      ],
+    },
+    {
+      name: '进阶',
+      goal: `讲透核心机制、参数与适用边界`,
+      chapters: [
+        chapter(`${name} 核心机制拆解`, pick(2), '进阶'),
+        chapter(`${name} 关键参数与边界条件`, pick(3), '进阶'),
+      ],
+    },
+    {
+      name: '实战',
+      goal: `把知识落到简历里的真实项目与线上排障`,
+      chapters: [
+        chapter(`${name} 项目落地：从方案到上线`, pick(4), '进阶'),
+        chapter(`${name} 线上故障定位与止损`, null, '深度'),
+      ],
+    },
+    {
+      name: '精通',
+      goal: `扛住压力面：选型、权衡、反向输出`,
+      chapters: [
+        chapter(`${name} 选型对比与架构取舍`, null, '深度'),
+        chapter(`${name} 压力面模拟：连续追问 5 轮`, null, '深度'),
+      ],
+    },
+  ];
+
+  return {
+    title: `${name} 面试系统课：从入门到精通`,
+    subtitle: `把零散考点串成一条能学完、能自检的路径`,
+    outcome: `学完能独立讲清 ${name} 的体系，并接住机制与项目追问`,
+    totalHours: 16,
+    interviewWeight: 5,
+    stages,
+  };
+}
+
+function mockLesson(chapterTitle, courseTitle) {
+  return {
+    objectives: [
+      `说清「${chapterTitle}」要解决的核心问题`,
+      '画出关键链路的每一步，并指出瓶颈可能出现在哪',
+      '举一个简历项目里的真实例子，带量化结果',
+      '接住两层以上追问，能主动说出适用边界',
+    ],
+    roadmap: [
+      {
+        section: `${courseTitle} · 本节位置`,
+        points: [
+          '这一节建立概念与机制，是后续实战章节的前提',
+          '学完应能独立回答该主题的基础与进阶问题',
+        ],
+      },
+    ],
+    sections: [
+      {
+        heading: `为什么需要 ${chapterTitle}`,
+        body: `先把问题摆出来：**不做这件事会怎样**。\n\n面试里最常见的失分点，是一上来就背定义，却没有说清它解决了什么约束。正确的开场是：\n\n- 场景：什么样的业务或流量特征会触发这个问题；\n- 代价：不处理会导致什么（延迟、成本、正确性）；\n- 判断：你当时依据什么信号决定动手。`,
+        code: '',
+        interviewAngle: '面试官会先听你能不能把问题定义清楚，而不是急着上方案。',
+      },
+      {
+        heading: '核心机制：一条因果链',
+        body: `把链路拆成三步：**输入 → 处理 → 结果**，每一步都说清损耗与边界。\n\n以本章主题为例：\n\n1. 输入阶段决定了上限，脏数据或长尾请求会让后面的优化全部失效；\n2. 处理阶段的核心是资源与并发的取舍，参数只是表象；\n3. 结果阶段必须可度量，否则无法证明改动有效。`,
+        code: `# 最小验证：先量化，再优化\n# 1) 记录基线\n# 2) 只改一个变量\n# 3) 用同一批样本对比`,
+        interviewAngle: '会追问：你怎么证明瓶颈在这一步，而不是别的地方？',
+      },
+      {
+        heading: '怎么用：一个最小可运行示例',
+        body: `先跑通最小闭环，再做优化。示例刻意省略了业务代码，只保留关键调用与参数，方便你对照自己的项目讲。\n\n注意两个细节：参数不要照抄，要说出取值依据；异常路径要显式处理，面试官很爱问"失败了怎么办"。`,
+        code: `// 关键不是代码本身，而是你能不能解释每个参数\nconst result = await run({\n  concurrency: 8,   // 依据：CPU 核数与下游限流\n  timeoutMs: 800,   // 依据：P99 的 1.2 倍\n  retry: 1,         // 只重试幂等请求\n});`,
+        interviewAngle: '会追问参数怎么定，答"默认值"基本就结束了。',
+      },
+      {
+        heading: '边界与常见坑',
+        body: `任何方案都有失效场景，主动说出来是加分项：\n\n- **数据分布变化**：离线调好的参数，线上长尾一多就退化；\n- **冷启动**：缓存未热时，保护措施反而成为瓶颈；\n- **观测缺失**：没有埋点就没有优化，也没有复盘。`,
+        code: '',
+        interviewAngle: '这一节对应"如果条件反过来会怎样"的追问。',
+      },
+    ],
+    walkthrough: {
+      case: '把简历里的项目按「场景 → 约束 → 方案 → 结果 → 反思」讲一遍',
+      steps: [
+        '用一句话说明业务场景与当时的量级',
+        '指出最硬的约束（延迟、成本、人力或稳定性）',
+        '说明你比较过哪两个方案，为什么选现在这个',
+        '给出量化结果，并说明归因方式',
+        '补一句：如果重来一次，你会先做什么',
+      ],
+    },
+    qa: [
+      {
+        q: `「${chapterTitle}」在你们项目里具体怎么落的？`,
+        a: '先说场景和约束，再说方案取舍，最后给结果数字。不要从技术名词开始。',
+        trap: '只讲技术栈，不讲业务约束，听起来像抄的。',
+      },
+      {
+        q: '如果流量涨 10 倍，哪里先崩？',
+        a: '指出最可能先到瓶颈的一环，给出扩容、降级、限流三类动作的优先级。',
+        trap: '只说"加机器"，没有说清瓶颈在哪。',
+      },
+      {
+        q: '你怎么证明改动有效？',
+        a: '同一批样本、同一口径指标、只改一个变量；给出前后对比和置信区间。',
+        trap: '拿不同时间段的数字直接对比。',
+      },
+    ],
+    pitfalls: ['把手段当目的，说不出为什么选它。', '只讲成功案例，回避真实故障。', '参数照抄默认值，说不出依据。'],
+    exercises: [
+      {
+        task: `用 200 字把你的项目按「场景 → 约束 → 方案 → 结果」写一遍，并录音讲 1 分钟`,
+        hint: '先写关键词，再脱稿讲；录音回听，删掉所有"然后""就是"。',
+        standard: '能在 1 分钟内讲清约束与取舍，并给出一个量化结果。',
+      },
+      {
+        task: '列三个面试官可能追问的边界条件，并各准备一句话回答',
+        hint: '从数据规模、并发、失败重试三个方向想。',
+        standard: '每个边界都能说清"什么情况下会失效、你怎么办"。',
+      },
+    ],
+    selfCheck: [
+      { q: `能否不看资料讲清「${chapterTitle}」的核心机制？`, answer: '能按输入 → 处理 → 结果三步讲清，并指出瓶颈环节。' },
+      { q: '能否说出一个真实项目例子并带数字？', answer: '能，数字要能解释口径与归因方式。' },
+      { q: '能否主动说出两个失效场景？', answer: '能，例如数据分布变化、冷启动、观测缺失。' },
+    ],
+    references: [
+      { title: '官方文档对应章节', note: '重点看限制条件与默认参数' },
+      { title: '经典教材相关章节', note: '建立机制层面的因果链' },
+    ],
+  };
+}
+
 /* ---------------- 对外入口 ---------------- */
 
 export function mockChat(messages) {
@@ -857,7 +1066,27 @@ export function mockChat(messages) {
 
   if (system.includes('读懂一份简历')) return reply(PROFILE);
 
-  if (system.includes('必须复习的知识点')) {
+  if (system.includes('整类漏掉了')) {
+    const block = (user.split('【必须补齐的技能】')[1] || '').split('【已有分组')[0];
+    const names = block
+      .split('\n')
+      .map((l) => l.replace(/^-\s*/, '').replace(/（.*$/, '').trim())
+      .filter(Boolean);
+    return reply(mockCoverage(names.slice(0, 6)));
+  }
+
+  if (system.includes('系统课程') && system.includes('排一门')) {
+    const name = (user.match(/【本课程对应的技能】([^\n]+)/) || [])[1]?.trim() || 'Java';
+    return reply(mockCourse(name));
+  }
+
+  if (system.includes('一节完整的课程讲义')) {
+    const chapter = (user.match(/【本章】([^\n]+)/) || [])[1]?.trim() || '本章';
+    const course = (user.match(/【课程】([^｜\n]+)/) || [])[1]?.trim() || '系统课程';
+    return reply(mockLesson(chapter, course));
+  }
+
+  if (system.includes('必须系统复习的知识点') || system.includes('必须复习的知识点')) {
     return reply({ groups: TOPICS });
   }
 

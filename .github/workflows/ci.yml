@@ -38,6 +38,9 @@ jobs:
       - name: 上传文件名编码自测（中文乱码还原）
         run: node scripts/filename.mjs
 
+      - name: 技能覆盖自测（别名匹配 / 缺失检测 / 兜底分组）
+        run: node scripts/coverage.mjs
+
       - name: 启动演示模式
         run: |
           DEMO_MODE=1 PORT=8899 node server/index.js &

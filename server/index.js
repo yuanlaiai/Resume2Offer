@@ -9,8 +9,8 @@ import { startJob, getJob } from './jobs.js';
 import { extractResume, normalizeText } from './extract.js';
 import { fixFileName } from './filename.js';
 import { describeLLM, LLMError } from './llm.js';
-import { runAnalyze, runMaterials, runQuiz, runGrade, runPlan, runExpand, runReport, prefillRole } from './pipeline.js';
-import { toMarkdown, materialMarkdown, reportMarkdown } from './export.js';
+import { runAnalyze, runMaterials, runQuiz, runGrade, runPlan, runExpand, runReport, runCourses, runLessons, prefillRole } from './pipeline.js';
+import { toMarkdown, materialMarkdown, reportMarkdown, courseMarkdown, lessonMarkdown } from './export.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -131,6 +131,44 @@ app.post('/api/analyses/:id/materials', (req, res, next) => {
   res.json({ jobId });
 });
 
+/* ---------------- 2.5 系统课程 ---------------- */
+
+app.post('/api/analyses/:id/courses', (req, res, next) => {
+  try {
+    const record = store.get(req.params.id);
+    if (!record) return res.status(404).json({ error: '记录不存在' });
+    const names = Array.isArray(req.body?.names)
+      ? req.body.names.filter((x) => typeof x === 'string').slice(0, 12)
+      : [];
+    const auto = Boolean(req.body?.auto);
+    const jobId = startJob(['排课程大纲'], (ctx) =>
+      runCourses(ctx, { analysisId: record.id, names, auto }),
+    );
+    res.json({ jobId });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/analyses/:id/courses/:courseId/lessons', (req, res, next) => {
+  try {
+    const record = store.get(req.params.id);
+    if (!record) return res.status(404).json({ error: '记录不存在' });
+    const course = (record.courses || []).find((c) => c.id === req.params.courseId);
+    if (!course) return res.status(404).json({ error: '找不到这门课程' });
+    const chapterIds = Array.isArray(req.body?.chapterIds)
+      ? req.body.chapterIds.filter((x) => typeof x === 'string').slice(0, 8)
+      : [];
+    const depth = ['lite', 'standard', 'deep'].includes(req.body?.depth) ? req.body.depth : 'standard';
+    const jobId = startJob(['写章节讲义'], (ctx) =>
+      runLessons(ctx, { analysisId: record.id, courseId: course.id, chapterIds, depth }),
+    );
+    res.json({ jobId });
+  } catch (err) {
+    next(err);
+  }
+});
+
 /* ---------------- 3. 出题 ---------------- */
 
 app.post('/api/analyses/:id/quiz', (req, res, next) => {
@@ -232,6 +270,36 @@ app.get('/api/analyses/:id/report.md', (req, res) => {
   const record = store.get(req.params.id);
   if (!record?.report) return res.status(404).json({ error: '报告还没生成' });
   sendMd(res, reportMarkdown(record.report, record), `${record.profile?.candidate?.name || '候选人'}-面试准备报告.md`);
+});
+
+/** 整门课程下载（含已生成讲义） */
+app.get('/api/analyses/:id/courses/:courseId.md', (req, res) => {
+  const record = store.get(req.params.id);
+  if (!record) return res.status(404).json({ error: '记录不存在' });
+  const course = (record.courses || []).find((c) => c.id === req.params.courseId);
+  if (!course) return res.status(404).json({ error: '课程还没生成' });
+  sendMd(res, courseMarkdown(course, record), `${course.title || course.group}-系统课程.md`);
+});
+
+/** 单章讲义下载 */
+app.get('/api/analyses/:id/courses/:courseId/chapters/:chapterId.md', (req, res) => {
+  const record = store.get(req.params.id);
+  if (!record) return res.status(404).json({ error: '记录不存在' });
+  const course = (record.courses || []).find((c) => c.id === req.params.courseId);
+  if (!course) return res.status(404).json({ error: '课程还没生成' });
+
+  let hit = null;
+  for (const stage of course.stages || []) {
+    const chapter = (stage.chapters || []).find((ch) => ch.id === req.params.chapterId);
+    if (chapter) {
+      hit = { stage, chapter };
+      break;
+    }
+  }
+  if (!hit) return res.status(404).json({ error: '章节不存在' });
+  if (!hit.chapter.lesson) return res.status(404).json({ error: '这一章还没有生成讲义' });
+
+  sendMd(res, lessonMarkdown(course, hit.stage, hit.chapter), `${hit.chapter.title}-讲义.md`);
 });
 
 /* ---------------- 静态资源 ---------------- */

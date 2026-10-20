@@ -41,6 +41,13 @@ const a = await j('/api/analyze', { method: 'POST', body: form });
 const an = await waitJob(a.jobId);
 console.log(`   ok: id=${an.analysisId} topics=${an.topics.length} groups=${an.groups.length}`);
 
+console.log('1b) 技能覆盖（简历里的技术大类不能缺）...');
+const requiredCov = (an.coverage || []).filter((c) => c.required !== false);
+const uncovered = requiredCov.filter((c) => !c.covered);
+if (!requiredCov.length) throw new Error('没有返回技能覆盖数据');
+if (uncovered.length) throw new Error(`技能未覆盖：${uncovered.map((c) => c.name).join('、')}`);
+console.log(`   ok: ${requiredCov.length}/${requiredCov.length} 覆盖 → ${requiredCov.map((c) => `${c.name}(${c.group})`).join(' | ')}`);
+
 console.log('2) materials（深度档 = 深度）...');
 const m = await j(`/api/analyses/${an.analysisId}/materials`, {
   method: 'POST',
@@ -121,6 +128,34 @@ const rmd = await fetch(`${BASE}/api/analyses/${an.analysisId}/report.md`);
 const rmdText = await rmd.text();
 if (!rmd.ok) throw new Error('报告下载失败');
 console.log(`   ok: report.md=${rmdText.length} chars`);
+
+console.log('7b) 系统课程（按技术大类排课 + 章节讲义）...');
+const csJob = await j(`/api/analyses/${an.analysisId}/courses`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ auto: true }),
+});
+const cs = await waitJob(csJob.jobId);
+if (!cs.courses?.length) throw new Error('没有排出课程');
+const course = cs.courses[0];
+const totalCh = course.stages.reduce((s, st) => s + st.chapters.length, 0);
+if (course.stages.length < 3 || totalCh < 6) throw new Error(`课程结构不完整：${course.stages.length} 阶段 / ${totalCh} 章`);
+const firstCh = course.stages[0].chapters[0];
+const lJob = await j(`/api/analyses/${an.analysisId}/courses/${course.id}/lessons`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ chapterIds: [firstCh.id], depth: 'standard' }),
+});
+const ls = await waitJob(lJob.jobId);
+const lesson = ls.course.stages[0].chapters[0].lesson;
+if (!lesson?.sections?.length) throw new Error('讲义没有正文小节');
+const courseMd = await fetch(`${BASE}/api/analyses/${an.analysisId}/courses/${course.id}.md`).then((r) => r.text());
+if (!courseMd.includes('学习路径')) throw new Error('课程导出缺少学习路径');
+const lessonMd = await fetch(`${BASE}/api/analyses/${an.analysisId}/courses/${course.id}/chapters/${firstCh.id}.md`).then((r) => r.text());
+if (!lessonMd.includes(firstCh.title)) throw new Error('单章导出内容不对');
+console.log(
+  `   ok: ${cs.courses.length} 门课；首门 ${course.group} ${course.stages.length} 阶段/${totalCh} 章；讲义 ${lesson.sections.length} 节/${lesson.qa.length} 问；md=${courseMd.length}/${lessonMd.length} 字`,
+);
 
 console.log('8) export.md & list...');
 const md = await fetch(`${BASE}/api/analyses/${an.analysisId}/export.md`);

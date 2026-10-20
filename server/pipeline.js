@@ -4,6 +4,7 @@ import { searchWeb, formatSearchBlock, searchReady } from './search.js';
 import {
   parseResumePrompt,
   buildTopicsPrompt,
+  buildCoveragePrompt,
   buildMaterialPrompt,
   buildQuizPrompt,
   buildGradePrompt,
@@ -11,9 +12,13 @@ import {
   expandTopicsPrompt,
   prefillPrompt,
   buildReportPrompt,
+  buildCoursePrompt,
+  buildLessonPrompt,
   depthSpec,
+  courseDepthSpec,
   DEPTHS,
 } from './prompts.js';
+import { normalizeStack, missingStacks, coverageOf, fallbackGroup, hasKey, keysOf } from './coverage.js';
 
 const clamp = (n, min, max, dflt) => {
   const v = Number(n);
@@ -24,9 +29,27 @@ const clamp = (n, min, max, dflt) => {
 const str = (v) => (typeof v === 'string' ? v.trim() : '');
 const arr = (v) => (Array.isArray(v) ? v : []);
 
+/** 模型没给 stack 时，从 skills / experiences / projects 里兜底拼一份 */
+function deriveStack(p) {
+  const items = [];
+  for (const s of arr(p?.skills)) {
+    for (const part of str(s?.name).split(/\s*\/\s*/)) {
+      if (part.trim()) items.push({ name: part.trim(), level: str(s?.level), evidence: str(s?.evidence) });
+    }
+  }
+  for (const e of arr(p?.experiences)) {
+    for (const s of arr(e?.stack)) items.push({ name: str(s), evidence: str(e?.company) });
+  }
+  for (const pr of arr(p?.projects)) {
+    for (const s of arr(pr?.stack)) items.push({ name: str(s), evidence: str(pr?.name) });
+  }
+  return normalizeStack(items, 16);
+}
+
 function normalizeProfile(raw) {
   const p = raw && typeof raw === 'object' ? raw : {};
   const candidate = p.candidate && typeof p.candidate === 'object' ? p.candidate : {};
+  const stack = normalizeStack(p.stack, 18);
   return {
     candidate: {
       name: str(candidate.name),
@@ -66,12 +89,13 @@ function normalizeProfile(raw) {
       .filter((r) => r.point)
       .slice(0, 6),
     missing: arr(p.missing).map(str).filter(Boolean).slice(0, 8),
+    stack: stack.length ? stack : deriveStack(p),
   };
 }
 
-function normalizeGroups(raw) {
-  const groups = arr(raw?.groups).slice(0, 6);
-  let counter = 0;
+function normalizeGroups(raw, startNo = 1) {
+  const groups = arr(raw?.groups).slice(0, 12);
+  let counter = startNo - 1;
   const out = [];
   for (const g of groups) {
     const name = str(g?.name) || `分组 ${out.length + 1}`;
@@ -91,8 +115,40 @@ function normalizeGroups(raw) {
         };
       })
       .filter((t) => t.title)
-      .slice(0, 10);
+      .slice(0, 12);
     if (topics.length) out.push({ name, why: str(g?.why), topics });
+  }
+  return out;
+}
+
+function nextTopicNo(groups) {
+  let max = 0;
+  for (const g of groups || []) {
+    for (const t of g.topics || []) {
+      const m = /^t(\d+)$/.exec(t.id || '');
+      if (m) max = Math.max(max, Number(m[1]));
+    }
+  }
+  return max + 1;
+}
+
+const normGroupName = (s) => String(s || '').toLowerCase().replace(/[\s\-_·/、]/g, '');
+
+/** 合并补充分组：同名（或包含关系）的并进已有组，其余追加 */
+function mergeGroups(groups, incoming) {
+  const out = (groups || []).map((g) => ({ ...g, topics: [...(g.topics || [])] }));
+  for (const g of incoming || []) {
+    const key = normGroupName(g.name);
+    const hit = out.find((x) => {
+      const k = normGroupName(x.name);
+      return k === key || k.includes(key) || key.includes(k);
+    });
+    if (hit) {
+      const seen = new Set(hit.topics.map((t) => t.title));
+      hit.topics.push(...g.topics.filter((t) => !seen.has(t.title)));
+    } else {
+      out.push(g);
+    }
   }
   return out;
 }
@@ -158,22 +214,63 @@ export async function prefillRole({ resumeText }) {
 
 /* ---------------- 1. 解析简历 + 知识点图谱 ---------------- */
 
+/**
+ * 覆盖保证：模型再"挑重点"，也不能把简历里写过的技术大类整类丢掉。
+ * 缺的项先定向补一次，仍缺就落兜底分组，保证页面上每一类都有位置。
+ */
+async function ensureCoverage(ctx, { profile, groups, targetRole, level }) {
+  let merged = groups;
+  const warnings = [];
+
+  let missing = missingStacks(profile.stack, merged);
+  if (missing.length) {
+    ctx.note(`发现 ${missing.length} 个技能没被覆盖，正在定向补齐：${missing.map((m) => m.name).join('、')}`);
+    try {
+      const raw = await chatJSON(
+        buildCoveragePrompt({
+          profile,
+          targetRole,
+          level,
+          missing,
+          existingGroups: merged.map((g) => g.name),
+        }),
+        { temperature: 0.3, maxTokens: 6500 },
+      );
+      merged = mergeGroups(merged, normalizeGroups(raw, nextTopicNo(merged)));
+    } catch (err) {
+      console.error('[coverage] 定向补齐失败：', err.message);
+    }
+    missing = missingStacks(profile.stack, merged);
+  }
+
+  for (const item of missing) {
+    const [g] = normalizeGroups({ groups: [fallbackGroup(item)] }, nextTopicNo(merged));
+    if (g) merged.push(g);
+    warnings.push(item.name);
+  }
+
+  return { groups: merged, warnings };
+}
+
 export async function runAnalyze(ctx, { resumeText, targetRole, level, fileName }) {
   ctx.step(0, '正在读简历，拆分经历与技能');
   const profileRaw = await chatJSON(parseResumePrompt({ resumeText, targetRole, level }), {
     temperature: 0.2,
-    maxTokens: 3000,
+    maxTokens: 4000,
   });
   const profile = normalizeProfile(profileRaw);
 
   ctx.step(1, '正在推导需要复习的知识点');
   const finalRole = targetRole || profile.targetRole.title;
   const topicsRaw = await chatJSON(
-    buildTopicsPrompt({ profile, targetRole: finalRole, level }),
-    { temperature: 0.35, maxTokens: 7000 },
+    buildTopicsPrompt({ profile, targetRole: finalRole, level, mustCover: profile.stack }),
+    { temperature: 0.35, maxTokens: 9000 },
   );
-  const groups = normalizeGroups(topicsRaw);
+  let groups = normalizeGroups(topicsRaw);
   if (!groups.length) throw new Error('没有生成出知识点，请重试或换一个模型');
+
+  const covered = await ensureCoverage(ctx, { profile, groups, targetRole: finalRole, level });
+  groups = covered.groups;
   const topics = flatten(groups);
 
   const record = await store.create({
@@ -183,11 +280,22 @@ export async function runAnalyze(ctx, { resumeText, targetRole, level, fileName 
     targetRole: finalRole,
     level: level || '',
     profile,
+    stack: profile.stack,
+    coverage: coverageOf(profile.stack, groups),
+    coverageWarnings: covered.warnings,
     groups,
     topics,
+    courses: [],
   });
 
-  return { analysisId: record.id, profile, groups, topics };
+  return {
+    analysisId: record.id,
+    profile,
+    groups,
+    topics,
+    coverage: record.coverage,
+    coverageWarnings: record.coverageWarnings,
+  };
 }
 
 /* ---------------- 2. 生成复习资料 ---------------- */
@@ -298,6 +406,344 @@ function snapshot(m) {
     createdAt: rest.createdAt || new Date().toISOString(),
     data: rest,
   };
+}
+
+/* ---------------- 2.5 系统课程：大纲 + 章节讲义 ---------------- */
+
+const STAGE_NAMES = ['入门', '进阶', '实战', '精通'];
+const STAGE_KEYS = ['beginner', 'advanced', 'practice', 'mastery'];
+const LEVELS = ['基础', '进阶', '深度'];
+
+function maxPriority(group) {
+  return (group?.topics || []).reduce((m, t) => Math.max(m, t.priority || 0), 0);
+}
+
+function findStackItem(stack, groupName) {
+  const target = str(groupName);
+  return (stack || []).find((s) => keysOf(s).some((k) => hasKey(target, k)));
+}
+
+/** 讲义历史版本去掉嵌套 */
+function stripLesson(lesson) {
+  const { history, ...rest } = lesson;
+  return rest;
+}
+
+function normalizeLesson(raw, { depth, sources, prev }) {
+  const body = {
+    objectives: arr(raw?.objectives).map(str).filter(Boolean).slice(0, 6),
+    roadmap: arr(raw?.roadmap)
+      .map((r) => ({ section: str(r?.section), points: arr(r?.points).map(str).filter(Boolean).slice(0, 5) }))
+      .filter((r) => r.section || r.points.length),
+    sections: arr(raw?.sections)
+      .map((s) => ({
+        heading: str(s?.heading),
+        body: str(s?.body),
+        code: str(s?.code),
+        interviewAngle: str(s?.interviewAngle),
+      }))
+      .filter((s) => s.heading || s.body)
+      .slice(0, 12),
+    walkthrough: {
+      case: str(raw?.walkthrough?.case),
+      steps: arr(raw?.walkthrough?.steps).map(str).filter(Boolean).slice(0, 8),
+    },
+    qa: arr(raw?.qa)
+      .map((q) => ({ q: str(q?.q), a: str(q?.a), trap: str(q?.trap) }))
+      .filter((q) => q.q)
+      .slice(0, 8),
+    pitfalls: arr(raw?.pitfalls).map(str).filter(Boolean).slice(0, 6),
+    exercises: arr(raw?.exercises)
+      .map((e) => ({ task: str(e?.task), hint: str(e?.hint), standard: str(e?.standard) }))
+      .filter((e) => e.task)
+      .slice(0, 5),
+    selfCheck: arr(raw?.selfCheck)
+      .map((s) => ({ q: str(s?.q), answer: str(s?.answer) }))
+      .filter((s) => s.q)
+      .slice(0, 6),
+    references: arr(raw?.references)
+      .map((r) => ({ title: str(r?.title), note: str(r?.note) }))
+      .filter((r) => r.title)
+      .slice(0, 6),
+    sources,
+    depth,
+    createdAt: new Date().toISOString(),
+  };
+
+  return {
+    ...body,
+    version: (prev?.version || 0) + 1,
+    history: prev ? [{ depth: prev.depth, createdAt: prev.createdAt, data: stripLesson(prev) }, ...(prev.history || [])].slice(0, 2) : [],
+  };
+}
+
+/** 模型没排出可用课程时，用已有考点兜底排一门（保证课程入口不空） */
+function fallbackCourse(group, existing) {
+  const rank = { 基础: 0, 进阶: 1, 深度: 2 };
+  const topics = (group.topics || [])
+    .slice()
+    .sort((a, b) => (rank[a.level] ?? 1) - (rank[b.level] ?? 1) || (b.priority || 0) - (a.priority || 0));
+
+  const per = Math.ceil(topics.length / 3) || 1;
+  const chunks = [topics.slice(0, per), topics.slice(per, per * 2), topics.slice(per * 2)];
+  let n = 0;
+
+  const stages = chunks
+    .map((chunk, i) => {
+      let prevTitle = '';
+      const chapters = chunk.map((t) => {
+        n += 1;
+        const ch = {
+          id: `ch${n}`,
+          title: t.title,
+          goal: `吃透「${t.title}」，并能接住面试追问`,
+          why: t.reason || '',
+          level: LEVELS.includes(t.level) ? t.level : '进阶',
+          hours: 2,
+          prereq: prevTitle ? [prevTitle] : [],
+          keyQuestions: (t.followups || []).slice(0, 4),
+          checkpoints: [`能脱稿讲清「${t.title}」的机制、边界，并举一个项目例子`],
+          topicIds: [t.id],
+          lesson: null,
+        };
+        prevTitle = t.title;
+        return ch;
+      });
+      return {
+        key: STAGE_KEYS[i] || `stage${i + 1}`,
+        name: STAGE_NAMES[i] || `阶段 ${i + 1}`,
+        goal: '',
+        chapters,
+      };
+    })
+    .filter((s) => s.chapters.length);
+
+  const totalHours = stages.reduce((sum, s) => sum + s.chapters.reduce((x, c) => x + c.hours, 0), 0);
+  return {
+    id: existing?.id || store.newId('c'),
+    group: group.name,
+    title: `${group.name} 系统课：从入门到面试实战`,
+    subtitle: '按考点难度排出的学习路径，先把地基打牢再上强度',
+    outcome: '学完能按顺序讲清每个考点，并接住两层以上追问',
+    totalHours,
+    interviewWeight: maxPriority(group) || 3,
+    stages,
+    version: (existing?.version || 0) + 1,
+    fallback: true,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function normalizeCourse(raw, { group, existing }) {
+  const validIds = new Set((group.topics || []).map((t) => t.id));
+  let chNo = 0;
+
+  const stages = arr(raw?.stages)
+    .slice(0, 4)
+    .map((s, i) => {
+      const chapters = arr(s?.chapters)
+        .slice(0, 5)
+        .map((ch) => {
+          chNo += 1;
+          return {
+            id: `ch${chNo}`,
+            title: str(ch?.title),
+            goal: str(ch?.goal),
+            why: str(ch?.why),
+            level: LEVELS.includes(ch?.level) ? ch.level : '进阶',
+            hours: clamp(ch?.hours, 0.5, 8, 2),
+            prereq: arr(ch?.prereq).map(str).filter(Boolean).slice(0, 4),
+            keyQuestions: arr(ch?.keyQuestions).map(str).filter(Boolean).slice(0, 5),
+            checkpoints: arr(ch?.checkpoints).map(str).filter(Boolean).slice(0, 4),
+            topicIds: [...new Set(arr(ch?.topicIds).map(str).filter((id) => validIds.has(id)))],
+            lesson: null,
+          };
+        })
+        .filter((c) => c.title);
+      return {
+        key: STAGE_KEYS[i] || `stage${i + 1}`,
+        name: str(s?.name) || STAGE_NAMES[i] || `阶段 ${i + 1}`,
+        goal: str(s?.goal),
+        chapters,
+      };
+    })
+    .filter((s) => s.chapters.length);
+
+  const chapterCount = stages.reduce((sum, s) => sum + s.chapters.length, 0);
+  if (stages.length < 2 || chapterCount < 3) return fallbackCourse(group, existing);
+
+  // 重新排课时，同名章节的讲义保留下来，避免用户白学
+  const oldLessons = new Map();
+  for (const s of existing?.stages || []) {
+    for (const c of s.chapters || []) {
+      if (c.lesson) oldLessons.set(normGroupName(c.title), c.lesson);
+    }
+  }
+  for (const s of stages) {
+    for (const c of s.chapters) {
+      const old = oldLessons.get(normGroupName(c.title));
+      if (old) c.lesson = old;
+    }
+  }
+
+  const hours = stages.reduce((sum, s) => sum + s.chapters.reduce((x, c) => x + c.hours, 0), 0);
+
+  return {
+    id: existing?.id || store.newId('c'),
+    group: group.name,
+    title: str(raw?.title) || `${group.name} 系统课`,
+    subtitle: str(raw?.subtitle),
+    outcome: str(raw?.outcome),
+    totalHours: clamp(raw?.totalHours, 1, 120, Math.round(hours) || 10),
+    interviewWeight: clamp(raw?.interviewWeight, 1, 5, maxPriority(group) || 3),
+    stages,
+    version: (existing?.version || 0) + 1,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * 生成课程大纲。
+ * names 指定要排的组；auto=true 时自动补优先级最高且还没有课程的 3 个组。
+ */
+export async function runCourses(ctx, { analysisId, names, auto = false }) {
+  const record = store.get(analysisId);
+  if (!record) throw new Error('找不到这份简历分析');
+
+  const groups = record.groups || [];
+  if (!groups.length) throw new Error('还没有知识点，请先完成简历分析');
+
+  const existing = new Map((record.courses || []).map((c) => [c.group, c]));
+  const stack = record.stack?.length ? record.stack : record.profile?.stack || [];
+  let targets;
+  if (Array.isArray(names) && names.length) {
+    targets = groups.filter((g) => names.includes(g.name));
+  } else if (auto) {
+    // 自动排课优先保证「简历里的每个技术大类」都有课，其次才是其他分组
+    const stackOf = (g) => findStackItem(stack, g.name);
+    const pending = groups.filter((g) => !existing.has(g.name));
+    const stackTargets = pending.filter((g) => stackOf(g)).sort((a, b) => maxPriority(b) - maxPriority(a));
+    const others = pending.filter((g) => !stackOf(g)).sort((a, b) => maxPriority(b) - maxPriority(a));
+    targets = [...stackTargets, ...others].slice(0, 6);
+  } else {
+    targets = groups.filter((g) => !existing.has(g.name));
+  }
+
+  if (!targets.length) {
+    return { analysisId, courses: record.courses || [], added: [], skipped: true };
+  }
+
+  ctx.step(0, `正在为 ${targets.length} 个技术大类排课（共 ${groups.length} 类）`);
+
+  const results = new Array(targets.length).fill(null);
+  const failed = [];
+  let finished = 0;
+
+  await pool(targets, 2, async (group, i) => {
+    try {
+      const raw = await chatJSON(
+        buildCoursePrompt({
+          profile: record.profile,
+          group,
+          targetRole: record.targetRole,
+          level: record.level,
+          stackItem: findStackItem(stack, group.name),
+        }),
+        { temperature: 0.35, maxTokens: 7000 },
+      );
+      results[i] = normalizeCourse(raw, { group, existing: existing.get(group.name) });
+    } catch (err) {
+      console.error(`[courses] ${group.name} 排课失败：`, err.message);
+      failed.push({ group: group.name, error: err.message });
+    }
+    finished += 1;
+    ctx.tick(finished / targets.length, `已完成 ${finished}/${targets.length}：${group.name}`);
+  });
+
+  const added = results.filter(Boolean);
+  const byGroup = new Map([...(record.courses || []), ...added].map((c) => [c.group, c]));
+  const courses = groups.map((g) => byGroup.get(g.name)).filter(Boolean);
+
+  await store.update(analysisId, { courses, stage: record.stage || 'parsed' });
+  ctx.tick(1, added.length ? `已排好 ${added.length} 门课` : '排课未成功');
+
+  if (!added.length && failed.length) throw new Error(failed[0].error || '排课失败，请重试');
+  return { analysisId, courses, added, failed };
+}
+
+/**
+ * 生成章节讲义。chapterIds 为空则补该课程里所有还没讲义的章节（单次最多 4 章）。
+ */
+export async function runLessons(ctx, { analysisId, courseId, chapterIds, depth = 'standard' }) {
+  const record = store.get(analysisId);
+  if (!record) throw new Error('找不到这份简历分析');
+
+  const course = (record.courses || []).find((c) => c.id === courseId);
+  if (!course) throw new Error('找不到这门课程，请先生成课程大纲');
+
+  const level = DEPTHS[depth] ? depth : 'standard';
+  const spec = courseDepthSpec(level);
+
+  const all = [];
+  for (const stage of course.stages || []) {
+    for (const chapter of stage.chapters || []) all.push({ stage, chapter });
+  }
+
+  let targets = Array.isArray(chapterIds) && chapterIds.length
+    ? all.filter((x) => chapterIds.includes(x.chapter.id))
+    : all.filter((x) => !x.chapter.lesson);
+
+  if (!targets.length) return { analysisId, course };
+
+  const total = targets.length;
+  targets = targets.slice(0, 4);
+  ctx.step(0, `正在写 ${targets.length} 节讲义（${spec.label}档）`);
+
+  let finished = 0;
+  const failed = [];
+  await pool(targets, 2, async ({ stage, chapter }) => {
+    try {
+      let searchBlock = '';
+      let sources = [];
+      if (searchReady()) {
+        const results = await searchWeb(`${course.title} ${chapter.title} 原理 面试 高频考点`, { maxResults: 4 });
+        searchBlock = formatSearchBlock(results);
+        sources = results.map((r, i) => ({ index: i + 1, title: r.title, url: r.url }));
+      }
+
+      const topics = (chapter.topicIds || [])
+        .map((id) => (record.topics || []).find((t) => t.id === id))
+        .filter(Boolean);
+
+      const raw = await chatJSON(
+        buildLessonPrompt({
+          profile: record.profile,
+          course,
+          stage,
+          chapter,
+          topics,
+          materials: record.materials || [],
+          targetRole: record.targetRole,
+          searchBlock,
+          depth: level,
+        }),
+        { temperature: level === 'deep' ? 0.45 : 0.4, maxTokens: spec.maxTokens },
+      );
+
+      chapter.lesson = normalizeLesson(raw, { depth: level, sources, prev: chapter.lesson });
+      delete chapter.lessonError;
+    } catch (err) {
+      console.error(`[lessons] ${chapter.title} 失败：`, err.message);
+      chapter.lessonError = err.message;
+      failed.push({ chapterId: chapter.id, title: chapter.title, error: err.message });
+    }
+    finished += 1;
+    ctx.tick(finished / targets.length, `已完成 ${finished}/${targets.length}：${chapter.title}`);
+  });
+
+  await store.update(analysisId, { courses: record.courses });
+  ctx.tick(1, '讲义已生成');
+  return { analysisId, course, failed, truncated: total > targets.length };
 }
 
 /* ---------------- 3. 出题 ---------------- */

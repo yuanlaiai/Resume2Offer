@@ -27,6 +27,11 @@ const state = {
   autoTimer: null,
   reportDepth: localStorage.getItem('if-depth') || 'standard',
   historyOpen: false,
+  courseId: null,
+  chapterId: null,
+  lessonDepth: localStorage.getItem('if-depth') || 'standard',
+  lessonVersion: 0,
+  lessonHistOpen: false,
 };
 
 const DEPTH_LABEL = { lite: '简单', standard: '中等', deep: '深度' };
@@ -726,6 +731,7 @@ async function deleteRecord(id) {
 
 const TABS = [
   { key: 'profile', label: '简历画像' },
+  { key: 'courses', label: '系统课程' },
   { key: 'topics', label: '知识点图谱' },
   { key: 'materials', label: '复习资料' },
   { key: 'report', label: '面试报告' },
@@ -745,6 +751,10 @@ async function openAnalysis(id) {
     state.materialId = record.materials?.find((m) => !m.error)?.topicId || record.topics?.[0]?.id || null;
     state.viewVersion = 0;
     state.historyOpen = false;
+    state.courseId = (record.courses || []).find((c) => (c.stages || []).length)?.id || null;
+    state.chapterId = null;
+    state.lessonVersion = 0;
+    state.lessonHistOpen = false;
     if (state.pendingMaterial) state.materialId = state.pendingMaterial;
     state.tab = defaultTab(record);
     if (state.pendingTab && TABS.some((t) => t.key === state.pendingTab)) state.tab = state.pendingTab;
@@ -759,6 +769,7 @@ async function openAnalysis(id) {
     if (state.pendingAuto) {
       const n = state.pendingAuto;
       state.pendingAuto = 0;
+      setTimeout(() => autoBuildCourses(), 200);
       if (!(record.materials || []).filter((m) => !m.error).length) {
         setTimeout(() => generateTop(n), 300);
       }
@@ -772,6 +783,7 @@ async function openAnalysis(id) {
 function defaultTab(record) {
   if (record.plan) return 'plan';
   if (record.attempts?.length) return 'review';
+  if ((record.courses || []).length) return 'courses';
   if (record.materials?.length) return 'materials';
   return 'topics';
 }
@@ -833,6 +845,7 @@ function tabCount(key) {
   const r = state.record;
   if (!r) return 0;
   if (key === 'topics') return (r.topics || []).length;
+  if (key === 'courses') return (r.courses || []).filter((c) => (c.stages || []).length).length;
   if (key === 'materials') return (r.materials || []).filter((m) => !m.error).length;
   if (key === 'report') return r.report ? 1 : 0;
   if (key === 'quiz') return (r.quizzes || []).length;
@@ -845,6 +858,7 @@ function renderPanel() {
   if (!panel) return;
   const fn = {
     profile: panelProfile,
+    courses: panelCourses,
     topics: panelTopics,
     materials: panelMaterials,
     report: panelReport,
@@ -857,6 +871,7 @@ function renderPanel() {
   void panel.offsetWidth;
   panel.style.animation = '';
   if (state.tab === 'profile') bindProfile();
+  if (state.tab === 'courses') bindCourses();
   if (state.tab === 'topics') bindTopics();
   if (state.tab === 'materials') bindMaterials();
   if (state.tab === 'report') bindReport();
@@ -874,6 +889,10 @@ function panelProfile() {
   const skills = p.skills || [];
   const exps = p.experiences || [];
   const projs = p.projects || [];
+  const coverage = r.coverage || [];
+  const requiredCov = coverage.filter((c) => c.required !== false);
+  const coveredCount = requiredCov.filter((c) => c.covered).length;
+  const courseByGroup = new Map((r.courses || []).map((c) => [c.group, c]));
 
   return `
     <div class="parse-strip">
@@ -884,6 +903,26 @@ function panelProfile() {
       <div class="ps-item"><b>${(r.topics || []).length}</b><span>个考点</span></div>
       <div class="ps-item"><b>${(r.materials || []).filter((m) => !m.error).length}</b><span>篇资料</span></div>
     </div>
+
+    ${coverage.length ? `<div class="card coverage-card">
+      <div class="card-title">技能覆盖<span class="line"></span>
+        <span class="cov-sum">${coveredCount}/${requiredCov.length} 已覆盖</span>
+      </div>
+      <p class="cov-intro">简历里出现的每一个技术大类都会单独成组、单独排课，不会因为模型“挑重点”被整类丢掉。</p>
+      <div class="cov-grid">
+        ${coverage.map((c) => {
+          const course = courseByGroup.get(c.group);
+          const chapters = (course?.stages || []).reduce((n, s) => n + (s.chapters || []).length, 0);
+          const cls = c.covered ? (course ? 'ok' : 'pending') : c.required === false ? 'optional' : 'miss';
+          return `<button class="cov-item ${cls}" data-cov="${esc(c.name)}" data-cov-group="${esc(c.group || '')}" title="${esc(c.evidence || '')}">
+            <span class="cov-ic">${c.covered ? '✓' : c.required === false ? '·' : '!'}</span>
+            <span class="cov-name">${esc(c.name)}</span>
+            <span class="cov-sub">${course ? `${chapters} 章` : c.covered ? '待排课' : c.required === false ? '非必考' : '缺失'}</span>
+          </button>`;
+        }).join('')}
+      </div>
+      <p class="cov-hint">${coveredCount < requiredCov.length ? '有技能没落到分组里，点一下即可补排。' : '点任意技能可直接进入对应课程。'}</p>
+    </div>` : ''}
 
     <div class="card identity-card">
       <div class="card-title">简历识别结果<span class="line"></span><span style="font-size:11.5px;font-weight:500;color:var(--muted)">从原文自动抽取，可核对</span></div>
@@ -956,9 +995,414 @@ function panelProfile() {
   `;
 }
 
-function bindProfile() {}
+function bindProfile() {
+  on('[data-cov]', 'click', (e) => {
+    const btn = e.currentTarget;
+    const group = btn.dataset.covGroup;
+    const name = btn.dataset.cov;
+    const course = (state.record.courses || []).find((c) => c.group === group);
+    if (course) {
+      state.courseId = course.id;
+      state.chapterId = null;
+      state.tab = 'courses';
+      renderWorkspace();
+      return;
+    }
+    if (group) {
+      generateCourses([group]);
+      return;
+    }
+    toast(`「${name}」还没有对应分组，重新分析一次即可强制覆盖`, 'err');
+  });
+}
+
+/* ---------- 系统课程 ---------- */
+
+function allChapters(course) {
+  return (course?.stages || []).flatMap((stage) => (stage.chapters || []).map((chapter) => ({ stage, chapter })));
+}
+
+function courseStats(course) {
+  const list = allChapters(course).map((x) => x.chapter);
+  return { total: list.length, done: list.filter((c) => c.lesson).length };
+}
+
+function currentCourse() {
+  const courses = (state.record?.courses || []).filter((c) => (c.stages || []).length);
+  return courses.find((c) => c.id === state.courseId) || courses[0] || null;
+}
+
+function panelCourses() {
+  const r = state.record;
+  const groups = r.groups || [];
+  if (!groups.length) return emptyState('还没有课程', '先完成一次简历分析，系统会按技术大类排课', '重新分析', 'home');
+
+  const courses = (r.courses || []).filter((c) => (c.stages || []).length);
+
+  if (!courses.length) {
+    return `<div class="card course-empty">
+      <div class="card-title">系统课程<span class="line"></span></div>
+      <p class="course-empty-desc">按简历里的每个技术大类，各排一门「从入门到精通」的课：4 个阶段、8-14 章，每章都能生成完整讲义。不再是一堆零散考点。</p>
+      <div class="course-empty-actions">
+        <button class="btn btn-brand" data-action="courses-all">一键排课（全部 ${groups.length} 类）</button>
+      </div>
+      <div class="group-chips">
+        ${groups.map((g) => `<button class="group-chip" data-gen-course="${esc(g.name)}">
+          <b>${esc(g.name)}</b><span>${(g.topics || []).length} 个考点</span><em>排课</em>
+        </button>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  const course = currentCourse();
+  if (state.chapterId) {
+    const hit = allChapters(course).find((x) => x.chapter.id === state.chapterId);
+    if (hit) return lessonView(course, hit.stage, hit.chapter);
+    state.chapterId = null;
+  }
+  return courseOverview(course, courses);
+}
+
+function courseOverview(course, courses) {
+  const stats = courseStats(course);
+  const pct = stats.total ? Math.round((stats.done / stats.total) * 100) : 0;
+  const pending = (state.record.groups || []).filter((g) => !courses.some((c) => c.group === g.name));
+
+  let no = 0;
+  return `<div class="course-layout">
+    <aside class="course-nav">
+      <div class="cn-title">课程 <span>${courses.length}</span></div>
+      ${courses
+        .map((c) => {
+          const s = courseStats(c);
+          const p = s.total ? Math.round((s.done / s.total) * 100) : 0;
+          return `<button class="course-tab ${c.id === course.id ? 'on' : ''}" data-course="${esc(c.id)}">
+            <div class="ct-row"><span class="ct-name">${esc(c.group)}</span><span class="ct-pct">${p}%</span></div>
+            <div class="ct-meta">${s.done}/${s.total} 讲 · 约 ${c.totalHours || '—'} 小时</div>
+            <i class="ct-bar"><b style="width:${p}%"></b></i>
+          </button>`;
+        })
+        .join('')}
+      ${pending.length ? `<div class="cn-sub">待排课 · ${pending.length}</div>
+        ${pending.map((g) => `<button class="course-tab pending" data-gen-course="${esc(g.name)}">
+          <span class="ct-name">${esc(g.name)}</span>
+          <span class="ct-meta">${(g.topics || []).length} 个考点 · 点击排课</span>
+        </button>`).join('')}` : ''}
+    </aside>
+
+    <div class="course-main">
+      <div class="course-hero">
+        <div class="eyebrow">系统课程 · 从入门到精通</div>
+        <h2>${esc(course.title || course.group)}</h2>
+        ${course.subtitle ? `<p class="course-sub">${esc(course.subtitle)}</p>` : ''}
+        <div class="course-chips">
+          ${course.totalHours ? `<span class="chip">约 ${course.totalHours} 小时</span>` : ''}
+          <span class="chip">面试权重 ${stars(course.interviewWeight || 3)}</span>
+          <span class="chip brand">${stats.done}/${stats.total} 章有讲义</span>
+          ${course.fallback ? '<span class="chip gap">按考点自动兜底排课</span>' : ''}
+        </div>
+        ${course.outcome ? `<div class="course-outcome">学完能达到：${esc(course.outcome)}</div>` : ''}
+        <div class="course-progress"><i style="width:${pct}%"></i></div>
+        <div class="course-tools">
+          <div class="depth-switch compact" id="lesson-depth">
+            ${Object.entries(DEPTH_LABEL).map(([k, v]) => `<button type="button" data-depth="${k}" class="${state.lessonDepth === k ? 'on' : ''}">${v}</button>`).join('')}
+          </div>
+          <button class="btn btn-brand btn-sm" id="gen-remaining" ${stats.done >= stats.total ? 'disabled' : ''}>补齐讲义（每次最多 4 章）</button>
+          <span class="spacer"></span>
+          <button class="btn btn-ghost btn-sm" id="dl-course">下载整门课</button>
+          <button class="btn btn-ghost btn-sm" id="print-course">打印</button>
+        </div>
+        <div class="course-tip">讲义按「${DEPTH_LABEL[state.lessonDepth]}」档生成；换档后点单章「重写」即可升级深度。</div>
+      </div>
+
+      ${(course.stages || [])
+        .map((stage, si) => {
+          const chapters = stage.chapters || [];
+          const rows = chapters
+            .map((ch) => {
+              no += 1;
+              return chapterRow(course, stage, ch, no);
+            })
+            .join('');
+          const undone = chapters.filter((c) => !c.lesson).length;
+          return `<section class="course-stage">
+            <div class="stage-head">
+              <span class="stage-idx">${String(si + 1).padStart(2, '0')}</span>
+              <div class="stage-title">
+                <h3>${esc(stage.name)}</h3>
+                ${stage.goal ? `<p>${esc(stage.goal)}</p>` : ''}
+              </div>
+              ${undone ? `<button class="btn btn-quiet btn-sm" data-gen-stage="${esc(stage.key)}">补齐本阶段 ${undone} 章</button>` : '<span class="stage-done">✓ 本阶段已完成</span>'}
+            </div>
+            <div class="chapter-list">${rows}</div>
+          </section>`;
+        })
+        .join('')}
+    </div>
+  </div>`;
+}
+
+function chapterRow(course, stage, ch, no) {
+  const done = Boolean(ch.lesson);
+  return `<div class="chapter-row ${done ? 'done' : ''}">
+    <div class="ch-no">${String(no).padStart(2, '0')}</div>
+    <div class="ch-main">
+      <div class="ch-title">${esc(ch.title)}
+        <span class="badge lv-${esc(ch.level || '进阶')}">${esc(ch.level || '进阶')}</span>
+        ${ch.hours ? `<span class="badge">${esc(ch.hours)}h</span>` : ''}
+        ${done ? `<span class="badge brand">讲义 · ${DEPTH_LABEL[ch.lesson.depth] || '中等'}</span>` : ''}
+        ${ch.lessonError ? '<span class="badge gap">生成失败</span>' : ''}
+      </div>
+      ${ch.goal ? `<div class="ch-goal">${esc(ch.goal)}</div>` : ''}
+      ${(ch.keyQuestions || []).length || (ch.checkpoints || []).length ? `<details class="ch-more">
+        <summary>面试会怎么问 · 通关标准</summary>
+        <div class="ch-more-body">
+          ${(ch.keyQuestions || []).length ? `<div><b>可能被问</b>${ch.keyQuestions.map((q) => `<div class="fq">· ${esc(q)}</div>`).join('')}</div>` : ''}
+          ${(ch.checkpoints || []).length ? `<div style="margin-top:6px"><b>通关标准</b>${ch.checkpoints.map((c) => `<div class="fq">☐ ${esc(c)}</div>`).join('')}</div>` : ''}
+        </div>
+      </details>` : ''}
+    </div>
+    <div class="ch-actions">
+      ${done
+        ? `<button class="btn btn-quiet btn-sm" data-open-chapter="${esc(ch.id)}">阅读讲义</button>
+           <button class="btn btn-quiet btn-sm" data-gen-lesson="${esc(ch.id)}">重写</button>`
+        : `<button class="btn btn-brand btn-sm" data-gen-lesson="${esc(ch.id)}">生成讲义</button>`}
+    </div>
+  </div>`;
+}
+
+function lessonView(course, stage, chapter) {
+  const current = chapter.lesson;
+  const hist = state.lessonVersion && current?.history?.[state.lessonVersion - 1];
+  const l = hist?.data || current;
+  const stats = courseStats(course);
+
+  return `<div class="lesson-page">
+    <div class="lesson-top">
+      <button class="btn btn-quiet btn-sm" id="back-course">← 返回课程目录</button>
+      <div class="lesson-crumb">${esc(course.title || course.group)}<span>/</span>${esc(stage.name)}<span>/</span>${esc(chapter.title)}</div>
+      <span class="spacer"></span>
+      <div class="depth-switch compact" id="lesson-depth">
+        ${Object.entries(DEPTH_LABEL).map(([k, v]) => `<button type="button" data-depth="${k}" class="${state.lessonDepth === k ? 'on' : ''}">${v}</button>`).join('')}
+      </div>
+      <button class="btn btn-brand btn-sm" id="gen-lesson-one">${current ? `按「${DEPTH_LABEL[state.lessonDepth]}」重写` : '生成本章讲义'}</button>
+      ${current?.history?.length ? `<button class="btn btn-quiet btn-sm" id="lesson-history">历史版本 ${current.history.length}</button>` : ''}
+      <button class="btn btn-ghost btn-sm" id="dl-lesson">下载本章</button>
+      <button class="btn btn-ghost btn-sm" id="print-lesson">打印</button>
+    </div>
+
+    ${hist ? `<div class="version-banner">
+      <span>正在查看历史版本 v${current.history.length - state.lessonVersion + 1}（${DEPTH_LABEL[l.depth] || l.depth}，${esc(fmtDate(l.createdAt))}）</span>
+      <button class="btn btn-quiet btn-sm" id="exit-lesson-version">返回当前版本</button>
+    </div>` : ''}
+
+    ${state.lessonHistOpen && current?.history?.length ? `<div class="history-list" style="margin-bottom:14px">
+      ${current.history.map((h, i) => `<div class="history-row ${state.lessonVersion === i + 1 ? 'on' : ''}">
+        <span class="hv">v${current.history.length - i}</span>
+        <span class="hd">${DEPTH_LABEL[h.depth] || h.depth || '—'} · ${esc(fmtDate(h.createdAt))}</span>
+        <button class="btn btn-quiet btn-sm" data-lesson-version="${i + 1}">查看</button>
+      </div>`).join('')}
+    </div>` : ''}
+
+    <article class="lesson">
+      <header class="lesson-head">
+        <div class="eyebrow">${esc(stage.name)} · 第 ${stats.total ? allChapters(course).findIndex((x) => x.chapter.id === chapter.id) + 1 : 1} / ${stats.total} 章</div>
+        <h1>${esc(chapter.title)}</h1>
+        ${chapter.goal ? `<p class="lesson-goal">${esc(chapter.goal)}</p>` : ''}
+        ${chapter.why ? `<p class="lesson-why">${esc(chapter.why)}</p>` : ''}
+      </header>
+
+      ${!l ? `<div class="lesson-missing">
+        <p>这一章还没有生成讲义。</p>
+        <button class="btn btn-brand" id="gen-lesson-empty">生成本章讲义</button>
+      </div>` : lessonBody(l, chapter)}
+    </article>
+  </div>`;
+}
+
+function lessonBody(l, chapter) {
+  const sections = l.sections || [];
+  return `
+    ${(l.objectives || []).length ? `<section class="lesson-block">
+      <h3>学习目标</h3>
+      <ul class="lesson-objectives">${l.objectives.map((o) => `<li>${esc(o)}</li>`).join('')}</ul>
+    </section>` : ''}
+
+    ${(l.roadmap || []).length ? `<section class="lesson-block">
+      <h3>本节的位置</h3>
+      ${l.roadmap.map((r) => `<div class="roadmap-row">
+        ${r.section ? `<b>${esc(r.section)}</b>` : ''}
+        <ul>${(r.points || []).map((p) => `<li>${esc(p)}</li>`).join('')}</ul>
+      </div>`).join('')}
+    </section>` : ''}
+
+    ${sections.map((s, i) => `<section class="lesson-block lesson-sec">
+      <h3><span class="sec-no">${String(i + 1).padStart(2, '0')}</span>${esc(s.heading)}</h3>
+      ${s.body ? `<div class="prose">${md(s.body)}</div>` : ''}
+      ${s.code ? `<pre class="lesson-code"><code>${esc(s.code)}</code></pre>` : ''}
+      ${s.interviewAngle ? `<div class="interview-angle"><b>面试视角</b>${esc(s.interviewAngle)}</div>` : ''}
+    </section>`).join('')}
+
+    ${l.walkthrough?.case ? `<section class="lesson-block walkthrough">
+      <h3>实战推演</h3>
+      <p class="wt-case">${esc(l.walkthrough.case)}</p>
+      <ol class="wt-steps">${(l.walkthrough.steps || []).map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
+    </section>` : ''}
+
+    ${(l.qa || []).length ? `<section class="lesson-block">
+      <h3>追问与应答</h3>
+      ${l.qa.map((q) => `<div class="qa">
+        <button class="qa-q" type="button"><span class="q-mark">Q</span><span>${esc(q.q)}</span><span class="arrow">▾</span></button>
+        <div class="qa-a">${q.a ? `<div>${esc(q.a)}</div>` : ''}${q.trap ? `<div class="trap">⚠️ ${esc(q.trap)}</div>` : ''}</div>
+      </div>`).join('')}
+    </section>` : ''}
+
+    ${(l.pitfalls || []).length ? `<section class="lesson-block">
+      <h3>容易答错</h3>
+      <div class="pitfalls">${l.pitfalls.map((p) => `<div class="pitfall">${esc(p)}</div>`).join('')}</div>
+    </section>` : ''}
+
+    ${(l.exercises || []).length ? `<section class="lesson-block">
+      <h3>动手练习</h3>
+      <div class="exercises">${l.exercises.map((e, i) => `<div class="exercise">
+        <div class="ex-title">${i + 1}. ${esc(e.task)}</div>
+        ${e.hint ? `<div class="ex-hint">提示：${esc(e.hint)}</div>` : ''}
+        ${e.standard ? `<div class="ex-standard">参考做法：${esc(e.standard)}</div>` : ''}
+      </div>`).join('')}</div>
+    </section>` : ''}
+
+    ${(l.selfCheck || []).length ? `<section class="lesson-block">
+      <h3>自测</h3>
+      <div class="self-check">${l.selfCheck.map((s, i) => `<details class="self-item">
+        <summary>${i + 1}. ${esc(s.q)}</summary>
+        <div>${esc(s.answer)}</div>
+      </details>`).join('')}</div>
+    </section>` : ''}
+
+    ${(l.references || []).length ? `<section class="lesson-block">
+      <h3>延伸阅读</h3>
+      <ul class="refs">${l.references.map((r) => `<li><b>${esc(r.title)}</b>${r.note ? `　${esc(r.note)}` : ''}</li>`).join('')}</ul>
+    </section>` : ''}
+
+    ${(l.sources || []).length ? `<section class="lesson-block sources-block">
+      <h3>参考来源<span class="src-note">全网检索，点击可核对原文</span></h3>
+      <ol class="sources">${l.sources.map((s) => `<li>
+        ${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title || s.url)}</a>` : `<span>${esc(s.title || '来源')}</span>`}
+        ${s.url ? `<span class="src-host">${esc(hostOf(s.url))}</span>` : ''}
+      </li>`).join('')}</ol>
+    </section>` : ''}
+  `;
+}
+
 
 /* ---------- 知识点图谱 ---------- */
+
+function bindCourses() {
+  on('[data-course]', 'click', (e) => {
+    state.courseId = e.currentTarget.dataset.course;
+    state.chapterId = null;
+    state.lessonVersion = 0;
+    state.lessonHistOpen = false;
+    renderPanel();
+  });
+
+  on('[data-gen-course]', 'click', (e) => {
+    e.stopPropagation();
+    generateCourses([e.currentTarget.dataset.genCourse]);
+  });
+
+  on('[data-open-chapter]', 'click', (e) => {
+    state.chapterId = e.currentTarget.dataset.openChapter;
+    state.lessonVersion = 0;
+    state.lessonHistOpen = false;
+    renderPanel();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+
+  on('[data-gen-lesson]', 'click', (e) => {
+    e.stopPropagation();
+    generateLessons([e.currentTarget.dataset.genLesson]);
+  });
+
+  on('[data-gen-stage]', 'click', (e) => {
+    const course = currentCourse();
+    const stage = (course?.stages || []).find((s) => s.key === e.currentTarget.dataset.genStage);
+    const ids = (stage?.chapters || []).filter((c) => !c.lesson).map((c) => c.id);
+    if (ids.length) generateLessons(ids);
+  });
+
+  const remaining = document.getElementById('gen-remaining');
+  if (remaining) remaining.addEventListener('click', () => generateLessons());
+
+  // 课程目录上的深度切换：只影响后续生成，不自动重写
+  document.querySelectorAll('#lesson-depth [data-depth]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.lessonDepth = btn.dataset.depth;
+      localStorage.setItem('if-depth', state.lessonDepth);
+      document.querySelectorAll('#lesson-depth [data-depth]').forEach((b) => b.classList.toggle('on', b.dataset.depth === state.lessonDepth));
+      const tip = document.querySelector('.course-tip');
+      if (tip) tip.textContent = `讲义按「${DEPTH_LABEL[state.lessonDepth]}」档生成；换档后点单章「重写」即可升级深度。`;
+    });
+  });
+
+  const dlCourse = document.getElementById('dl-course');
+  if (dlCourse) {
+    dlCourse.addEventListener('click', () => {
+      const c = currentCourse();
+      if (c) window.open(`/api/analyses/${state.record.id}/courses/${c.id}.md`, '_blank');
+    });
+  }
+  const printCourse = document.getElementById('print-course');
+  if (printCourse) printCourse.addEventListener('click', () => window.print());
+
+  /* ---- 讲义页 ---- */
+  const back = document.getElementById('back-course');
+  if (back) {
+    back.addEventListener('click', () => {
+      state.chapterId = null;
+      state.lessonVersion = 0;
+      state.lessonHistOpen = false;
+      renderPanel();
+    });
+  }
+
+  const genOne = document.getElementById('gen-lesson-one') || document.getElementById('gen-lesson-empty');
+  if (genOne) genOne.addEventListener('click', () => generateLessons([state.chapterId]));
+
+  const dlLesson = document.getElementById('dl-lesson');
+  if (dlLesson) {
+    dlLesson.addEventListener('click', () => {
+      const c = currentCourse();
+      if (c && state.chapterId) window.open(`/api/analyses/${state.record.id}/courses/${c.id}/chapters/${state.chapterId}.md`, '_blank');
+    });
+  }
+  const printLesson = document.getElementById('print-lesson');
+  if (printLesson) printLesson.addEventListener('click', () => window.print());
+
+  const historyBtn = document.getElementById('lesson-history');
+  if (historyBtn) {
+    historyBtn.addEventListener('click', () => {
+      state.lessonHistOpen = !state.lessonHistOpen;
+      renderPanel();
+    });
+  }
+
+  on('[data-lesson-version]', 'click', (e) => {
+    state.lessonVersion = Number(e.currentTarget.dataset.lessonVersion);
+    state.lessonHistOpen = true;
+    renderPanel();
+  });
+
+  const exitVersion = document.getElementById('exit-lesson-version');
+  if (exitVersion) {
+    exitVersion.addEventListener('click', () => {
+      state.lessonVersion = 0;
+      renderPanel();
+    });
+  }
+
+  on('.qa-q', 'click', (e) => e.currentTarget.closest('.qa').classList.toggle('open'));
+}
 
 function sortedTopics() {
   return (state.record?.topics || [])
@@ -1891,6 +2335,7 @@ document.addEventListener('click', (e) => {
   const a = btn.dataset.action;
   if (a === 'materials-all') generateMaterials(true);
   if (a === 'materials-top') generateTop(5);
+  if (a === 'courses-all') generateCourses();
   if (a === 'report-new') generateReport();
   if (a === 'quiz-new') generateQuiz();
   if (a === 'go-quiz') { state.tab = 'quiz'; renderWorkspace(); }
@@ -1902,6 +2347,122 @@ document.addEventListener('click', (e) => {
 
 async function refreshRecord() {
   state.record = await api(`/api/analyses/${state.record.id}`);
+}
+
+/** 静默任务：不弹浮层，用于分析完成后的后台排课 */
+async function pollJobQuiet(jobId) {
+  for (let i = 0; i < 360; i += 1) {
+    const job = await api(`/api/jobs/${jobId}`);
+    if (job.status === 'done') return job.result;
+    if (job.status === 'error') throw new Error(job.error || '处理失败');
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error('生成超时，请稍后重试');
+}
+
+async function generateCourses(names = null) {
+  const r = state.record;
+  if (!r) return;
+  const one = names?.length ? names[0] : '';
+  try {
+    const res = await runJob(
+      api(`/api/analyses/${r.id}/courses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(names?.length ? { names } : { auto: false }),
+      }),
+      one ? `正在排「${one}」的课程` : '正在按技术大类排课',
+      one ? ['按 4 阶段排课', '把考点排成从入门到精通的章节'] : ['每个技术大类一门课', '4 阶段 / 8-14 章'],
+    );
+    await refreshRecord();
+    const list = state.record.courses || [];
+    const want = (one && list.find((c) => c.group === one)) || list.find((c) => (c.stages || []).length);
+    if (want) state.courseId = want.id;
+    state.chapterId = null;
+    state.tab = 'courses';
+    renderWorkspace();
+    toast(res.added?.length ? `已排好 ${res.added.length} 门课程` : '课程已是最新');
+  } catch (err) {
+    /* 浮层已提示 */
+  }
+}
+
+async function generateLessons(chapterIds = null) {
+  const r = state.record;
+  const course = currentCourse();
+  if (!r || !course) return;
+
+  let ids = chapterIds?.length
+    ? chapterIds
+    : allChapters(course).filter((x) => !x.chapter.lesson).map((x) => x.chapter.id);
+  ids = [...new Set(ids)];
+  if (!ids.length) return toast('所有章节都已有讲义了');
+
+  const batch = ids.slice(0, 4);
+  try {
+    await runJob(
+      api(`/api/analyses/${r.id}/courses/${course.id}/lessons`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chapterIds: batch, depth: state.lessonDepth }),
+      }),
+      '正在写章节讲义',
+      [`按「${DEPTH_LABEL[state.lessonDepth]}」写 ${batch.length} 节`, '先检索真实资料，再成文并标注来源'],
+    );
+    await refreshRecord();
+    state.lessonVersion = 0;
+    state.lessonHistOpen = false;
+    renderWorkspace();
+    toast(ids.length > batch.length ? `已生成 ${batch.length} 章，还剩 ${ids.length - batch.length} 章` : '讲义已生成');
+  } catch (err) {
+    /* 浮层已提示 */
+  }
+}
+
+/** 分析完成后的后台动作：按技术大类自动排课，并生成第一节课讲义 */
+async function autoBuildCourses() {
+  const r = state.record;
+  if (!r) return;
+  if ((r.courses || []).some((c) => (c.stages || []).length)) return;
+
+  try {
+    const res = await pollJobQuiet(
+      (
+        await api(`/api/analyses/${r.id}/courses`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ auto: true }),
+        })
+      ).jobId,
+    );
+    await refreshRecord();
+
+    const courses = state.record.courses || [];
+    const first = courses.find((c) => (c.stages || []).length);
+    if (first && !state.courseId) state.courseId = first.id;
+    if (state.tab === 'profile' || state.tab === 'courses') renderWorkspace();
+
+    if (first) {
+      const pending = allChapters(first).find((x) => !x.chapter.lesson);
+      if (pending) {
+        await pollJobQuiet(
+          (
+            await api(`/api/analyses/${r.id}/courses/${first.id}/lessons`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chapterIds: [pending.chapter.id], depth: 'standard' }),
+            })
+          ).jobId,
+        );
+        await refreshRecord();
+        if (state.tab === 'courses') renderWorkspace();
+      }
+    }
+
+    if (res.added?.length) toast(`已按技术大类排好 ${res.added.length} 门课程`);
+  } catch (err) {
+    console.error('[auto courses]', err);
+  }
 }
 
 async function expandTopic(topicId) {

@@ -298,6 +298,179 @@ export function toMarkdown(record) {
     }
   }
 
+  /* ---------- 系统课程 ---------- */
+  const courses = (record.courses || []).filter((c) => (c.stages || []).length);
+  if (courses.length) {
+    push('## 七、系统课程（从入门到精通）', '');
+    courses.forEach((c) => {
+      push(`### ${c.title || c.group}`, '');
+      if (c.subtitle) push(`_${c.subtitle}_`, '');
+      const cm = [];
+      if (c.totalHours) cm.push(`总时长约 ${c.totalHours} 小时`);
+      if (c.interviewWeight) cm.push(`面试权重 ${'★'.repeat(c.interviewWeight)}`);
+      if (c.outcome) cm.push(`学完能达到：${c.outcome}`);
+      if (cm.length) push(`- ${cm.join('　- ')}`, '');
+
+      push('| 阶段 | 章节 | 目标 | 时长 |', '| --- | --- | --- | --- |');
+      for (const st of c.stages || []) {
+        for (const ch of st.chapters || []) {
+          push(`| ${nz(st.name)} | ${ch.title} | ${nz(ch.goal)} | ${ch.hours || '—'}h |`);
+        }
+      }
+      push('');
+
+      for (const st of c.stages || []) {
+        for (const ch of st.chapters || []) {
+          if (!ch.lesson) continue;
+          const body = lessonMarkdown(c, st, ch).split('\n');
+          push(`#### ${st.name} · ${ch.title}`, '');
+          push(body[0]?.startsWith('# ') ? body.slice(2).join('\n') : body.join('\n'), '');
+        }
+      }
+    });
+  }
+
   push('', '---', '', '_由 Interview Forge 生成 · 内容供复习参考，请结合真实项目经历核对_');
+  return lines.join('\n');
+}
+
+/* ================= 系统课程 ================= */
+
+/** 单章讲义 → Markdown */
+export function lessonMarkdown(course, stage, chapter) {
+  const l = chapter?.lesson;
+  const lines = [];
+  const push = (...xs) => lines.push(...xs);
+
+  push(`# ${course?.title || '系统课程'} · ${chapter?.title || '章节'}`, '');
+  const meta = [];
+  if (stage?.name) meta.push(`- 阶段：${stage.name}`);
+  if (chapter?.level) meta.push(`- 难度：${chapter.level}`);
+  if (chapter?.hours) meta.push(`- 预计：${chapter.hours} 小时`);
+  if (l?.depth) meta.push(`- 讲义深度：${DEPTH_LABEL[l.depth] || l.depth}`);
+  if (chapter?.goal) meta.push(`- 本章目标：${chapter.goal}`);
+  if (meta.length) push(...meta, '');
+  if (chapter?.why) push(`> ${chapter.why}`, '');
+
+  if (chapter?.keyQuestions?.length) {
+    push('## 面试会怎么问', '');
+    chapter.keyQuestions.forEach((q) => push(`- ${q}`));
+    push('');
+  }
+  if (chapter?.checkpoints?.length) {
+    push('## 通关标准', '');
+    chapter.checkpoints.forEach((c) => push(`- [ ] ${c}`));
+    push('');
+  }
+
+  if (!l) {
+    push('_这一章还没有生成讲义。_', '');
+    return lines.join('\n');
+  }
+
+  if (l.objectives?.length) {
+    push('## 学习目标', '');
+    l.objectives.forEach((o) => push(`- ${o}`));
+    push('');
+  }
+  if (l.roadmap?.length) {
+    push('## 本节的位置', '');
+    l.roadmap.forEach((r) => {
+      if (r.section) push(`**${r.section}**`, '');
+      (r.points || []).forEach((p) => push(`- ${p}`));
+    });
+    push('');
+  }
+  (l.sections || []).forEach((s) => {
+    push(`## ${s.heading}`, '');
+    if (s.body) push(s.body, '');
+    if (s.code) push('```', s.code, '```', '');
+    if (s.interviewAngle) push(`> 面试视角：${s.interviewAngle}`, '');
+  });
+  if (l.walkthrough?.case) {
+    push('## 实战推演', '', `**场景**：${l.walkthrough.case}`, '');
+    (l.walkthrough.steps || []).forEach((s, i) => push(`${i + 1}. ${s}`));
+    push('');
+  }
+  if (l.qa?.length) {
+    push('## 追问与应答', '');
+    l.qa.forEach((q) => {
+      push(`- **问**：${q.q}`);
+      if (q.a) push(`  - **答**：${q.a}`);
+      if (q.trap) push(`  - ⚠️ 坑：${q.trap}`);
+    });
+    push('');
+  }
+  if (l.pitfalls?.length) {
+    push('## 易错点', '');
+    l.pitfalls.forEach((p) => push(`- ${p}`));
+    push('');
+  }
+  if (l.exercises?.length) {
+    push('## 动手练习', '');
+    l.exercises.forEach((e, i) => {
+      push(`${i + 1}. **${e.task}**`);
+      if (e.hint) push(`   - 提示：${e.hint}`);
+      if (e.standard) push(`   - 参考做法：${e.standard}`);
+    });
+    push('');
+  }
+  if (l.selfCheck?.length) {
+    push('## 自测', '');
+    l.selfCheck.forEach((s, i) => push(`${i + 1}. ${s.q}`, `   - 答案：${nz(s.answer)}`));
+    push('');
+  }
+  if (l.references?.length) {
+    push('## 延伸阅读', '');
+    l.references.forEach((r) => push(`- ${r.title}${r.note ? `（${r.note}）` : ''}`));
+    push('');
+  }
+  if (l.sources?.length) {
+    push('## 参考来源', '');
+    l.sources.forEach((s, i) => push(s.url ? `- [${i + 1}. ${s.title || '来源'}](${s.url})` : `- ${i + 1}. ${s.title || '来源'}`));
+    push('');
+  }
+  return lines.join('\n');
+}
+
+/** 整门课程 → Markdown（大纲 + 已生成讲义） */
+export function courseMarkdown(course, record) {
+  const lines = [];
+  const push = (...xs) => lines.push(...xs);
+  const name = record?.profile?.candidate?.name || '候选人';
+
+  push(`# ${name} · ${course.title || course.group}`, '');
+  if (course.subtitle) push(`> ${course.subtitle}`, '');
+  const meta = [];
+  if (course.totalHours) meta.push(`- 总时长：约 ${course.totalHours} 小时`);
+  if (course.interviewWeight) meta.push(`- 面试权重：${'★'.repeat(course.interviewWeight)}`);
+  if (course.outcome) meta.push(`- 学完能达到：${course.outcome}`);
+  if (meta.length) push(...meta, '');
+
+  push('## 学习路径', '');
+  push('| 阶段 | 章节 | 目标 | 时长 | 讲义 |', '| --- | --- | --- | --- | --- |');
+  for (const stage of course.stages || []) {
+    for (const ch of stage.chapters || []) {
+      push(`| ${nz(stage.name)} | ${ch.title} | ${nz(ch.goal)} | ${ch.hours || '—'}h | ${ch.lesson ? '✓' : '—'} |`);
+    }
+  }
+  push('');
+
+  for (const stage of course.stages || []) {
+    const chapters = (stage.chapters || []).filter((c) => c.lesson);
+    if (!chapters.length) continue;
+    push(`# 阶段：${stage.name}`, '');
+    if (stage.goal) push(`_${stage.goal}_`, '');
+    for (const ch of chapters) {
+      push('---', '');
+      const body = lessonMarkdown(course, stage, ch).split('\n');
+      // 去掉重复的 H1
+      push(body[0]?.startsWith('# ') ? body.slice(2).join('\n') : body.join('\n'), '');
+    }
+  }
+
+  if (!(course.stages || []).some((s) => (s.chapters || []).some((c) => c.lesson))) {
+    push('_这门课还没有生成章节讲义。_', '');
+  }
   return lines.join('\n');
 }

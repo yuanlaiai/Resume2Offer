@@ -103,6 +103,7 @@ JSON 结构：
   "targetRole": {"title": "岗位名称", "level": "初级/中级/高级/专家/管理", "fitScore": 0-100, "reason": "一句话说明匹配度判断依据"},
   "summary": "3-4 句话的人物画像：什么背景、强在哪、弱在哪、适合什么岗位",
   "skills": [{"name": "技能名", "level": "熟练/掌握/了解", "evidence": "简历中支撑它的原话"}],
+  "stack": [{"name": "技术大类的规范名（Java / Android / Docker / Kubernetes）", "alias": "简历里的其他写法（如 K8s）", "category": "语言/移动端/云原生/数据库/中间件/前端/工程化/数据与算法/软技能", "level": "熟练/掌握/了解", "evidence": "简历原话", "mustReview": true}],
   "experiences": [{"company": "", "role": "", "period": "", "highlights": ["做了什么+结果，带数字"], "stack": ["相关技术/方法/工具"]}],
   "projects": [{"name": "", "role": "", "desc": "一句话说清项目和你的角色", "stack": [], "impact": "结果与量化"}],
   "strengths": ["面试中的真实优势，要具体"],
@@ -113,6 +114,10 @@ JSON 结构：
 要求：
 - years 按工作经历推算，实习不算整年。
 - skills 只列简历里真实出现过的，8-15 个，按重要度降序。
+- **stack 必须穷举简历里出现过的所有技术大类**：合并 skills、每段 experiences[].stack、每个 projects[].stack，6-16 个，一个都不要漏。
+  这是后续课程覆盖的硬边界：漏掉 Java / Android / Docker / Kubernetes 这类大类，整套复习就会缺一整块。
+- stack.name 用业界规范名（统一写 Kubernetes 而不是 K8s、Android 而不是安卓），stack.alias 保留简历里的其他写法；同义词只留一项。
+- 写进技能栏或项目技术栈的，mustReview 一律给 true；只是顺带提一句的可以给 false。
 - highlights 必须带量化结果，简历没写数字就照实描述，不要替候选人编数字。
 - risks 是最有价值的部分：跳槽频率、技术深度不足、成果不可归因、职级与年限不匹配、项目规模偏小、空窗期等，2-5 条。
 - 全文中文。`,
@@ -127,21 +132,29 @@ ${resumeText}`,
   ];
 }
 
-export function buildTopicsPrompt({ profile, targetRole, level }) {
+export function buildTopicsPrompt({ profile, targetRole, level, mustCover = [] }) {
+  const coverList = (mustCover || []).map((s) => {
+    const meta = [s.category, s.level && `自评${s.level}`, s.evidence && `简历原话：${s.evidence}`]
+      .filter(Boolean)
+      .join('｜');
+    return `- ${s.name}${meta ? `（${meta}）` : ''}`;
+  });
+
   return [
     {
       role: 'system',
       content: `${INTERVIEWER}
 ${ROLE_ADAPT}
 
-现在你要基于候选人的简历，列出「这个人为了拿下目标岗位，必须复习的知识点」。这是整个复习计划的地基，宁可少而准，不要多而空。
+现在你要基于候选人的简历，列出「这个人为了拿下目标岗位，必须系统复习的知识点」。
+这不是列几个高频题，而是搭一张完整的学习地图：简历里写过的每一个技术大类都要有位置，不能因为"挑重点"而整类缺失。
 ${JSON_RULE}
 
 JSON 结构：
 {
   "groups": [
     {
-      "name": "分组名（如 Java 并发 / 项目深挖 / 数据指标 / 行业认知）",
+      "name": "分组名：技术大类直接用该技能名（Java / Android / Docker / Kubernetes / MySQL…）；非技能类用「项目深挖」「岗位必考」「简历缺口」",
       "why": "为什么这个人要复习这一组，绑到简历的哪一段",
       "topics": [
         {
@@ -160,19 +173,73 @@ JSON 结构：
 }
 
 要求：
-- 一共 14-20 个知识点，分 3-5 组。id 从 t1 递增，全局唯一。
-- 覆盖三类：① 简历里写了的技能/项目（必须深挖，占 60%）；② 目标岗位必考的基础（占 25%）；③ 简历没体现但岗位需要的能力，标 "gap": true（占 15%）。
+- 一共 28-40 个知识点，分 6-9 组。id 从 t1 递增，全局唯一。
+- **【必须覆盖清单】里的每一项都必须单独成组，组名必须包含该技能原名，一个都不能漏。** 这是硬性要求，优先级高于"少而精"。
+- 每个技能组内 3-5 个考点，且必须同时包含「基础 / 进阶 / 深度」三档，形成从入门到精通的梯度，方便后续排成课程。
+- 清单之外再补：1 组「项目深挖」（从简历的项目与量化结果出发）、1 组「岗位必考 / 简历缺口」（gap: true）。
+- 覆盖三类：① 简历里写了的技能/项目（深挖，占大头）；② 目标岗位必考的基础；③ 简历没体现但岗位需要的能力，标 "gap": true。
 - title 必须具体：写"MySQL 索引失效的 6 种场景"，不要写"MySQL"；写"项目里 QPS 从 200 提到 2000 的具体做法"，不要写"项目经验"。
 - priority 5 = 几乎必问，1 = 锦上添花。
 - interviewerFocus 要写出「他真正在意什么」，例如"不是背定义，而是看你会不会在实际场景里选错索引"。
-- 全文中文。`,
+- 全文中文，技术名词保留英文原文。`,
     },
     {
       role: 'user',
       content: `【候选人档案】
 ${JSON.stringify(profile, null, 2)}
 
-【目标岗位】${targetRole || profile?.targetRole?.title || '未指定'}${level ? `\n【目标级别】${level}` : ''}`,
+【目标岗位】${targetRole || profile?.targetRole?.title || '未指定'}${level ? `\n【目标级别】${level}` : ''}
+
+【必须覆盖清单（每个都必须单独成组，组名包含原名）】
+${coverList.length ? coverList.join('\n') : '（简历未提取到技能栈，请自行从简历中穷举所有技术大类）'}`,
+    },
+  ];
+}
+
+/** 覆盖补齐：只针对被漏掉的技能生成分组，避免整份重来 */
+export function buildCoveragePrompt({ profile, targetRole, level, missing, existingGroups }) {
+  const list = (missing || [])
+    .map((s) => `- ${s.name}${s.evidence ? `（简历原话：${s.evidence}）` : ''}${s.level ? `｜自评${s.level}` : ''}`)
+    .join('\n');
+
+  return [
+    {
+      role: 'system',
+      content: `${INTERVIEWER}
+${ROLE_ADAPT}
+
+候选人的简历里明确写了下面这些技术，但复习清单把它们整类漏掉了。现在只补这些缺失项，不要重复已有分组。
+${JSON_RULE}
+
+JSON 结构：
+{
+  "groups": [
+    {
+      "name": "技能原名（如 Kubernetes）",
+      "why": "为什么必须复习它，绑到简历哪一段",
+      "topics": [
+        {"id": "t1", "title": "", "level": "基础|进阶|深度", "priority": 1-5, "gap": false, "reason": "", "interviewerFocus": "", "followups": ["", ""]}
+      ]
+    }
+  ]
+}
+
+要求：
+- 每个缺失技能一组，组名必须包含技能原名。
+- 每组 3-4 个考点，必须同时覆盖 基础 / 进阶 / 深度 三档，能支撑后面排成「入门→精通」的课程。
+- 考点要具体到能被追问，不要写"XX 基础"。
+- 全文中文。`,
+    },
+    {
+      role: 'user',
+      content: `【候选人档案摘要】${profile?.summary || ''}
+【目标岗位】${targetRole || ''}${level ? `（${level}）` : ''}
+
+【必须补齐的技能】
+${list || '（无）'}
+
+【已有分组（不要重复，也不要改名）】
+${(existingGroups || []).map((g) => `- ${g}`).join('\n') || '（暂无）'}`,
     },
   ];
 }
@@ -496,6 +563,205 @@ ${JSON.stringify(grade, null, 2).slice(0, 14000)}
 
 【全部知识点】
 ${topics.map((t) => `- ${t.id} ${t.title}（${t.level}，重要度${t.priority}${t.gap ? '，简历缺口' : ''}）`).join('\n')}`,
+    },
+  ];
+}
+
+/* ================= 系统课程 ================= */
+
+/** 课程讲义的深度规格（比单篇速查卡更系统，篇幅更大） */
+export const COURSE_DEPTHS = {
+  lite: {
+    label: '简单',
+    guide: `【课程深度：简单】目标是快速过一遍、建立框架。
+- sections 3-4 节，每节 150-250 字，只讲"是什么 + 为什么 + 怎么用"；
+- 代码/命令给最小可运行示例，不做源码展开；
+- qa 2-3 组，exercises 1-2 道，selfCheck 2-3 题；
+- 不写延伸阅读（references 给空数组）。`,
+    maxTokens: 4200,
+  },
+  standard: {
+    label: '中等',
+    guide: `【课程深度：中等】标准档：学完能应对一轮正式面试。
+- sections 5-7 节，每节 250-450 字，要有因果链、适用边界和一个具体例子；
+- 关键机制配代码 / 命令 / 配置示例；
+- qa 3-4 组（含追问链），exercises 2 道，selfCheck 3-4 题；
+- references 2-3 条真实资料。`,
+    maxTokens: 6500,
+  },
+  deep: {
+    label: '深度',
+    guide: `【课程深度：深度】目标是压力面能扛住连续追问，甚至反向输出。
+- sections 6-9 节，每节 400-700 字，写到实现机制层面：数据结构、关键参数、瓶颈、什么情况下失效；
+- 至少一组 A/B 选型对比（各自适用场景）；
+- 代码示例要能体现关键参数与边界处理；
+- qa 4-5 组，exercises 3 道（含一道开放设计），selfCheck 4-5 题；
+- references 3-5 条真实资料。`,
+    maxTokens: 9000,
+  },
+};
+
+export function courseDepthSpec(depth) {
+  return COURSE_DEPTHS[depth] || COURSE_DEPTHS.standard;
+}
+
+/** 为一个技术大类排「从入门到精通」的系统课 */
+export function buildCoursePrompt({ profile, group, targetRole, level, stackItem }) {
+  const topics = (group?.topics || [])
+    .map((t) => `- ${t.id}｜${t.title}｜${t.level}｜重要度${t.priority}/5${t.gap ? '｜简历缺口' : ''}`)
+    .join('\n');
+
+  return [
+    {
+      role: 'system',
+      content: `${INTERVIEWER}
+${ROLE_ADAPT}
+
+现在你要为候选人排一门「${group?.name || '技术'}」的系统课程：从入门到精通，学完能直接上目标岗位的面试。
+不是把知识点排个序，而是像培训负责人带新人：先建立心智模型，再补原理深度，再落到项目实战，最后到压力面与选型。
+${JSON_RULE}
+
+JSON 结构：
+{
+  "title": "课程名，例如「Java 面试系统课：从语法到 JVM 调优」",
+  "subtitle": "一句话说明这门课解决什么问题（不超过 40 字）",
+  "outcome": "学完能达到什么水平（一句话，可验证）",
+  "totalHours": 数字,
+  "interviewWeight": 1-5,
+  "stages": [
+    {
+      "name": "入门|进阶|实战|精通",
+      "goal": "这一阶段要建立什么能力",
+      "chapters": [
+        {
+          "title": "章节名",
+          "goal": "学完这一章能做到什么",
+          "why": "为什么现在学它、和简历哪一段相关",
+          "level": "基础|进阶|深度",
+          "hours": 0.5-4,
+          "prereq": ["前置章节标题"],
+          "keyQuestions": ["面试会怎么问，2-4 个"],
+          "checkpoints": ["通关标准，2-3 条，可自检"],
+          "topicIds": ["t1", "t3"]
+        }
+      ]
+    }
+  ]
+}
+
+硬性要求：
+- 固定 4 个阶段，name 依次是「入门」「进阶」「实战」「精通」；每阶段 2-4 章，全书 8-14 章。
+- 章节顺序就是学习顺序；prereq 只能引用本课程里更靠前的章节标题。
+- 阶段分工：入门建立概念与最小可用；进阶讲原理、边界与常见坑；实战绑定候选人简历里的项目与线上排障；精通讲选型、机制/源码、压力面追问。
+- **必须尽量复用下面给出的考点**：topicIds 只能填清单里真实存在的 id，可多选；实在没有对应考点才留空数组。
+- keyQuestions 必须是面试官真会问的，不要写"什么是 XX"这种教科书题。
+- checkpoints 要能用一句话自检，例如"能不看资料讲清 A 与 B 的取舍，并各举一个项目例子"。
+- totalHours 与各章 hours 大致对得上。
+- 全文中文，技术名词保留英文原文。`,
+    },
+    {
+      role: 'user',
+      content: `【候选人背景】${profile?.summary || ''}
+【目标岗位】${targetRole || ''}${level ? `（${level}）` : ''}
+
+【本课程对应的技能】${group?.name || ''}${stackItem?.evidence ? `\n【简历证据】${stackItem.evidence}` : ''}${stackItem?.level ? `\n【自评水平】${stackItem.level}` : ''}
+【为什么需要这门课】${group?.why || ''}
+
+【本组已有考点（排课时必须复用）】
+${topics || '（无，请按该技能的通用面试体系排课）'}`,
+    },
+  ];
+}
+
+/** 一章的完整讲义 */
+export function buildLessonPrompt({
+  profile,
+  course,
+  stage,
+  chapter,
+  topics = [],
+  materials = [],
+  targetRole,
+  searchBlock,
+  depth = 'standard',
+}) {
+  const spec = courseDepthSpec(depth);
+
+  const topicBlock = topics
+    .map((t) => {
+      const m = materials.find((x) => x.topicId === t.id && !x.error);
+      const extra = m
+        ? `\n  已生成速查卡：${m.oneLine || ''}${(m.core || []).length ? `；要点：${m.core.slice(0, 2).join('；')}` : ''}`
+        : '';
+      return `- ${t.title}（${t.level}，重要度${t.priority}/5）｜面试关注：${t.interviewerFocus || '—'}${extra}`;
+    })
+    .join('\n');
+
+  return [
+    {
+      role: 'system',
+      content: `${INTERVIEWER}
+${ROLE_ADAPT}
+
+现在你要写「一节完整的课程讲义」，不是单点速答卡，也不是百科词条。
+读者是简历上写着这项技能的候选人，目标是：跟着这一节学完，能建立概念、看懂机制、动手用起来，并且接得住面试追问。
+
+${spec.guide}
+
+写作顺序（必须遵守）：
+1. 先给学习目标与本节在课程中的位置；
+2. 用分节讲解推进：为什么需要它 → 核心机制 → 怎么用（代码/命令/配置） → 边界与坑；
+3. 给一个贯穿案例（优先用候选人简历里的真实项目）；
+4. 最后落到面试：会怎么问、怎么答、哪里会翻车；
+5. 配练习与自测，确保"学完能验证"。
+
+${JSON_RULE}
+
+JSON 格式：
+{
+  "objectives": ["3-5 条，学完能做到什么，动词开头"],
+  "roadmap": [{"section": "本节在课程中的位置", "points": ["这一节解决什么", "和前后章节的关系"]}],
+  "sections": [
+    {
+      "heading": "小节标题",
+      "body": "讲解正文，可用 markdown（**加粗**、- 列表、\`行内代码\`）。要有因果链和具体例子，不要空话",
+      "code": "可选的代码/命令/配置示例，没有就给空字符串",
+      "interviewAngle": "面试官会从这一节怎么问（一句话）"
+    }
+  ],
+  "walkthrough": {"case": "一个真实场景（优先简历项目）", "steps": ["第 1 步…", "第 2 步…"]},
+  "qa": [{"q": "面试题", "a": "口语化回答，可直接背", "trap": "这题埋的坑/答错暴露什么"}],
+  "pitfalls": ["最容易答错的 2-4 个点，具体到错误说法"],
+  "exercises": [{"task": "动手练习", "hint": "思路提示", "standard": "参考做法/标准答案要点"}],
+  "selfCheck": [{"q": "自测题", "answer": "答案要点"}],
+  "references": [{"title": "真实存在的经典书/官方文档", "note": "看哪一部分"}]
+}
+
+要求：
+- sections 之间要有递进关系，不要并列堆砌；每个 heading 都要能独立看懂。
+- code 只在真的需要时给，必须是可以运行或可以直接对照的片段，不要伪代码占位。
+- qa 必须是真的会连环追问的问题，答案要口语化，不要"应该从原理角度阐述"这种空话。
+- references 只写你确定真实存在的资料；不确定就给空数组，绝对不要编书名。
+${searchBlock ? '- 参考资料来源有编号 [1][2]，正文用到时在句末标注编号，便于读者溯源。' : ''}
+- 全部中文，术语保留英文原文。`,
+    },
+    {
+      role: 'user',
+      content: `【候选人背景】${profile?.summary || ''}
+【目标岗位】${targetRole || ''}
+
+【课程】${course?.title || ''}${course?.subtitle ? `｜${course.subtitle}` : ''}
+【阶段】${stage?.name || ''}${stage?.goal ? `：${stage.goal}` : ''}
+【本章】${chapter?.title || ''}
+【本章目标】${chapter?.goal || ''}
+【为什么学它】${chapter?.why || ''}
+【面试会怎么问】${(chapter?.keyQuestions || []).join(' / ') || '—'}
+【通关标准】${(chapter?.checkpoints || []).join(' / ') || '—'}
+【本次深度】${spec.label}
+
+【本章覆盖的考点】
+${topicBlock || '（本章没有绑定具体考点，请围绕章节标题组织内容）'}
+${searchBlock ? `\n【联网检索到的参考资料】\n${searchBlock}\n\n以上是真实世界资料片段：用来补充行业实践、最新动态和具体案例，必须消化后用自己的话重写；与常识矛盾时以专业判断为准；不确定的内容宁可不写，禁止照抄原文。` : ''}`,
     },
   ];
 }
