@@ -1,5 +1,5 @@
 import { store } from './store.js';
-import { chatJSON } from './llm.js';
+import { chatJSON, chat } from './llm.js';
 import { searchWeb, formatSearchBlock, searchReady } from './search.js';
 import {
   parseResumePrompt,
@@ -14,6 +14,7 @@ import {
   buildReportPrompt,
   buildCoursePrompt,
   buildLessonPrompt,
+  buildChatPrompt,
   depthSpec,
   courseDepthSpec,
   DEPTHS,
@@ -1144,4 +1145,35 @@ export async function runReport(ctx, { analysisId, depth = 'standard' }) {
 function stripHistory(r) {
   const { history, ...rest } = r;
   return rest;
+}
+
+/* ---------------- AI 随问（划词追问） ---------------- */
+
+/**
+ * 多轮随问对话：不进任务队列，直接 await。
+ * messages 由调用方传入（含最新一条 user），服务端负责注入背景并落库。
+ */
+export async function runChat({ analysisId, messages, selection, context }) {
+  const record = analysisId ? store.get(analysisId) : null;
+
+  const prompt = buildChatPrompt({
+    profile: record?.profile,
+    targetRole: record?.targetRole,
+    selection,
+    context,
+    messages,
+  });
+
+  const reply = await chat(prompt, { temperature: 0.5, maxTokens: 3000 });
+
+  if (record) {
+    const chats = [
+      ...(record.chats || []),
+      ...messages.filter((m) => m.role === 'user' && m.content?.trim()),
+      { role: 'assistant', content: reply, at: new Date().toISOString() },
+    ].slice(-40);
+    await store.update(record.id, { chats });
+  }
+
+  return { reply, analysisId: record?.id || null };
 }

@@ -2650,3 +2650,228 @@ function route() {
 
 window.addEventListener('hashchange', route);
 boot();
+
+/* ---------------- AI 随问（划词问 AI + 右下角对话抽屉） ---------------- */
+
+const chat = {
+  open: false,
+  messages: [], // { role, content, quote? }
+  busy: false,
+  seed: null, // { selection, context }
+};
+
+const TAB_LABEL = {
+  profile: '简历画像',
+  topics: '知识点图谱',
+  courses: '系统课程',
+  materials: '复习资料',
+  report: '面试报告',
+  quiz: '测验',
+  review: '复盘',
+  plan: '计划',
+};
+
+/* ---------- 划词浮出按钮 ---------- */
+
+const $fab = document.createElement('button');
+$fab.id = 'ask-fab';
+$fab.className = 'hidden';
+$fab.type = 'button';
+$fab.innerHTML = `<span class="fab-ic">✦</span>问 AI`;
+document.body.appendChild($fab);
+
+function currentSelection() {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+  const text = sel.toString().replace(/\s+/g, ' ').trim();
+  if (text.length < 2 || text.length > 2000) return null;
+  const node = sel.anchorNode;
+  const el = node && (node.nodeType === 1 ? node : node.parentElement);
+  if (!el || !$app.contains(el) || el.closest('#ai-drawer, #ask-fab, input, textarea, [contenteditable]')) return null;
+  return { text, rect: sel.getRangeAt(0).getBoundingClientRect(), el };
+}
+
+function selectionContext(el) {
+  const heading = el.closest('h1, h2, h3, .ch-title, .card-title, .lesson-head')?.innerText?.trim();
+  const page = TAB_LABEL[state.tab] || '';
+  return [page, heading].filter(Boolean).join(' · ').slice(0, 300);
+}
+
+function positionFab(rect) {
+  const fab = $fab;
+  fab.classList.remove('hidden');
+  const w = fab.offsetWidth || 92;
+  const h = fab.offsetHeight || 36;
+  const left = Math.min(Math.max(8, rect.right - w), window.innerWidth - w - 8);
+  const top = rect.top - h - 8 < 8 ? rect.bottom + 8 : rect.top - h - 8;
+  fab.style.left = `${left}px`;
+  fab.style.top = `${Math.max(8, top + window.scrollY)}px`;
+}
+
+document.addEventListener('pointerup', (e) => {
+  if (e.target instanceof Element && (e.target.closest('#ai-drawer') || e.target.closest('#ask-fab'))) return;
+  // 等浏览器完成选区结算
+  setTimeout(() => {
+    const hit = currentSelection();
+    if (hit) positionFab(hit.rect);
+    else $fab.classList.add('hidden');
+  }, 10);
+});
+document.addEventListener('scroll', () => $fab.classList.add('hidden'), true);
+
+/* ---------- 右下角对话抽屉 ---------- */
+
+const $drawer = document.createElement('div');
+$drawer.id = 'ai-drawer';
+$drawer.innerHTML = `
+  <div class="ai-head">
+    <div class="ai-title"><span class="ai-dot"></span>AI 随问<small>结合你的简历与目标岗位回答</small></div>
+    <div class="ai-head-btns">
+      <button type="button" class="ai-mini" id="ai-new" title="清空当前话题，重新开始">新话题</button>
+      <button type="button" class="ai-mini" id="ai-close" title="收起">✕</button>
+    </div>
+  </div>
+  <div class="ai-msgs" id="ai-msgs"></div>
+  <div class="ai-empty" id="ai-empty">
+    <p><b>选中页面里的任意内容</b>，点「问 AI」就能得到结合你简历的讲解。</p>
+    <p>也可以直接在下方输入问题继续追问。</p>
+  </div>
+  <div class="ai-input-row">
+    <textarea id="ai-input" rows="1" placeholder="继续追问…（Enter 发送，Shift+Enter 换行）"></textarea>
+    <button type="button" class="ai-send" id="ai-send" title="发送">➤</button>
+  </div>`;
+document.body.appendChild($drawer);
+const $aiMsgs = $drawer.querySelector('#ai-msgs');
+const $aiEmpty = $drawer.querySelector('#ai-empty');
+const $aiInput = $drawer.querySelector('#ai-input');
+
+function renderChat() {
+  $drawer.classList.toggle('open', chat.open);
+  const items = chat.messages
+    .map((m) => {
+      if (m.role === 'user') {
+        const quote = m.quote
+          ? `<blockquote class="ai-quote">${esc(m.quote)}</blockquote>`
+          : '';
+        return `<div class="ai-msg user"><div class="ai-bubble">${quote}${esc(m.display || m.content).replace(/\n/g, '<br>')}</div></div>`;
+      }
+      if (m.role === 'error') {
+        return `<div class="ai-msg err">${esc(m.content)}</div>`;
+      }
+      return `<div class="ai-msg bot"><div class="ai-bubble">${md(m.content)}</div></div>`;
+    })
+    .join('');
+  $aiMsgs.innerHTML =
+    items + (chat.busy ? `<div class="ai-msg bot"><div class="ai-bubble typing"><i></i><i></i><i></i></div></div>` : '');
+  $aiEmpty.style.display = chat.messages.length || chat.busy ? 'none' : '';
+  if (chat.open) $aiMsgs.scrollTop = $aiMsgs.scrollHeight;
+  $aiInput.disabled = chat.busy;
+  $drawer.querySelector('#ai-send').disabled = chat.busy;
+}
+
+async function sendChat() {
+  const text = $aiInput.value.trim();
+  $aiInput.value = '';
+  $aiInput.style.height = 'auto';
+
+  if (chat.busy) return;
+  if (!text && !chat.pendingSeed) return;
+
+  let userMsg;
+  if (chat.pendingSeed) {
+    const { selection } = chat.pendingSeed;
+    userMsg = {
+      role: 'user',
+      quote: selection,
+      display: '结合我的简历，把这段内容讲清楚：核心是什么、为什么重要、面试会怎么问、最容易错在哪。',
+      content: `【我选中了这段内容】\n${selection}\n\n【我的问题】请结合我的简历和目标岗位，把这段内容讲清楚：核心是什么、为什么重要、面试会怎么问、最常见的错误理解是什么。`,
+    };
+    chat.pendingSeed = null;
+  } else {
+    userMsg = { role: 'user', content: text };
+  }
+
+  chat.messages.push(userMsg);
+  chat.busy = true;
+  renderChat();
+
+  try {
+    const res = await api('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        analysisId: state.record?.id || '',
+        selection: chat.seed?.selection || '',
+        context: chat.seed?.context || '',
+        messages: chat.messages.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, content: m.content })),
+      }),
+    });
+    chat.messages.push({ role: 'assistant', content: res.reply });
+  } catch (err) {
+    chat.messages.push({ role: 'error', content: err.message || '回答失败，请重试' });
+  } finally {
+    chat.busy = false;
+    renderChat();
+  }
+}
+
+function openChatDrawer(seed = null) {
+  chat.open = true;
+  if (seed) {
+    chat.seed = seed;
+    chat.pendingSeed = seed;
+    // 恢复这条分析的历史对话（仅当当前抽屉是空的）
+    if (!chat.messages.length && state.record?.chats?.length) {
+      chat.messages = state.record.chats.slice(-10).map((m) => ({
+        role: m.role === 'assistant' ? 'assistant' : 'user',
+        content: m.content,
+        quote: m.role === 'user' && m.content.startsWith('【我选中了这段内容】') ? m.content.split('【我的问题】')[0].replace('【我选中了这段内容】\n', '').trim() : '',
+        display: m.role === 'user' ? m.content.split('【我的问题】')[1]?.trim() : '',
+      })).filter((m) => m.display || m.role === 'assistant');
+    }
+  }
+  renderChat();
+  setTimeout(() => $aiInput.focus(), 150);
+}
+
+$fab.addEventListener('click', (e) => {
+  e.preventDefault();
+  const hit = currentSelection();
+  const selection = hit?.text || chat.lastSelection || '';
+  if (hit) chat.lastSelection = hit.text;
+  if (!selection) return;
+  const context = hit ? selectionContext(hit.el) : '';
+  $fab.classList.add('hidden');
+  window.getSelection()?.removeAllRanges();
+  openChatDrawer({ selection, context });
+  sendChat();
+});
+
+$drawer.querySelector('#ai-close').addEventListener('click', () => {
+  chat.open = false;
+  renderChat();
+});
+$drawer.querySelector('#ai-new').addEventListener('click', () => {
+  chat.messages = [];
+  chat.seed = null;
+  chat.pendingSeed = null;
+  chat.lastSelection = '';
+  renderChat();
+});
+$drawer.querySelector('#ai-send').addEventListener('click', sendChat);
+$aiInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendChat();
+  }
+});
+$aiInput.addEventListener('input', () => {
+  $aiInput.style.height = 'auto';
+  $aiInput.style.height = `${Math.min(96, $aiInput.scrollHeight)}px`;
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && chat.open) {
+    chat.open = false;
+    renderChat();
+  }
+});

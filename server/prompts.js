@@ -765,3 +765,36 @@ ${searchBlock ? `\n【联网检索到的参考资料】\n${searchBlock}\n\n以�
     },
   ];
 }
+
+/* ================= AI 随问（划词追问） ================= */
+
+/** 划词问 AI：系统提示注入候选人背景与选中内容，消息体为多轮对话 */
+export function buildChatPrompt({ profile, targetRole, selection, context, messages }) {
+  const sys = `${INTERVIEWER}
+${ROLE_ADAPT}
+
+你现在还有个新身份：Resume2Offer 的「AI 随问助手」。用户在阅读复习资料 / 课程讲义 / 报告时选中了一段内容，向你提问。
+回答规则：
+- 紧扣选中的内容与用户的问题，先直接回答，再补充面试视角（这段内容面试会怎么问、最容易错在哪）；
+- 结合候选人的简历背景和目标岗位来解释，能举候选人项目里的例子就举；
+- 口语化、可直接听懂；默认 200-500 字；用户明显要更深入时才展开；
+- 用 markdown（**加粗**、- 列表、\`行内代码\`），代码片段要短而可运行；
+- 不确定的技术事实宁可不写，禁止编造书名、文档链接；
+- 如果用户的问题和选中内容无关，也正常回答，不要强行扯回选中内容。`;
+
+  const bg = [];
+  if (profile?.summary) bg.push(`【候选人背景】${profile.summary}`);
+  const role = targetRole || profile?.targetRole?.title;
+  if (role) bg.push(`【目标岗位】${role}`);
+  if (profile?.candidate?.years) bg.push(`【工作年限】约 ${profile.candidate.years} 年`);
+  if (selection) bg.push(`【用户选中的内容】\n"""\n${selection.slice(0, 2000)}\n"""`);
+  if (context) bg.push(`【选中内容所在位置】${context.slice(0, 300)}`);
+
+  return [
+    { role: 'system', content: bg.length ? `${sys}\n\n${bg.join('\n')}` : sys },
+    ...messages
+      .filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+      .slice(-16)
+      .map((m) => ({ role: m.role, content: m.content.slice(0, 6000) })),
+  ];
+}

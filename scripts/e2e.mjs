@@ -157,6 +157,39 @@ console.log(
   `   ok: ${cs.courses.length} 门课；首门 ${course.group} ${course.stages.length} 阶段/${totalCh} 章；讲义 ${lesson.sections.length} 节/${lesson.qa.length} 问；md=${courseMd.length}/${lessonMd.length} 字`,
 );
 
+console.log('7c) AI 随问（划词追问 + 多轮对话）...');
+const chatBody = {
+  analysisId: an.analysisId,
+  selection: 'RAG 检索质量决定了回答的可信度',
+  context: '系统课程 · 第一章',
+  messages: [
+    { role: 'user', content: '【我选中了这段内容】\nRAG 检索质量决定了回答的可信度\n\n【我的问题】这是什么意思？' },
+  ],
+};
+const chat1 = await j('/api/chat', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(chatBody),
+});
+if (!chat1.reply || chat1.reply.length < 10) throw new Error('随问第一轮没有回答');
+const chat2 = await j('/api/chat', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    analysisId: an.analysisId,
+    selection: chatBody.selection,
+    messages: [
+      ...chatBody.messages,
+      { role: 'assistant', content: chat1.reply.slice(0, 200) },
+      { role: 'user', content: '展开讲讲失效场景' },
+    ],
+  }),
+});
+if (!chat2.reply || chat2.reply.length < 10) throw new Error('随问第二轮没有回答');
+const chatRec = await j(`/api/analyses/${an.analysisId}`);
+if (!(chatRec.chats || []).length) throw new Error('随问对话没有落库');
+console.log(`   ok: 两轮回答 ${chat1.reply.length}/${chat2.reply.length} 字，落库 ${chatRec.chats.length} 条`);
+
 console.log('8) export.md & list...');
 const md = await fetch(`${BASE}/api/analyses/${an.analysisId}/export.md`);
 const mdText = await md.text();

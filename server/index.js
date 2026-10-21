@@ -9,7 +9,7 @@ import { startJob, getJob } from './jobs.js';
 import { extractResume, normalizeText } from './extract.js';
 import { fixFileName } from './filename.js';
 import { describeLLM, LLMError } from './llm.js';
-import { runAnalyze, runMaterials, runQuiz, runGrade, runPlan, runExpand, runReport, runCourses, runLessons, prefillRole } from './pipeline.js';
+import { runAnalyze, runMaterials, runQuiz, runGrade, runPlan, runExpand, runReport, runCourses, runLessons, runChat, prefillRole } from './pipeline.js';
 import { toMarkdown, materialMarkdown, reportMarkdown, courseMarkdown, lessonMarkdown } from './export.js';
 
 const app = express();
@@ -235,6 +235,33 @@ app.get('/api/jobs/:id', (req, res) => {
   if (!job) return res.status(404).json({ error: '任务不存在或已过期' });
   res.json(job);
 });
+
+/* ---------------- AI 随问（划词追问，直接响应不进队列） ---------------- */
+
+app.post('/api/chat', async (req, res, next) => {
+  try {
+    if (!llmReady()) return res.status(503).json({ error: '未配置模型' });
+
+    const raw = Array.isArray(req.body?.messages) ? req.body.messages : [];
+    const messages = raw
+      .filter((m) => m && typeof m.content === 'string' && m.content.trim() && (m.role === 'user' || m.role === 'assistant'))
+      .slice(-20)
+      .map((m) => ({ role: m.role, content: m.content.slice(0, 6000) }));
+    if (!messages.length || messages[messages.length - 1].role !== 'user') {
+      return res.status(400).json({ error: '消息格式不对' });
+    }
+
+    const analysisId = typeof req.body?.analysisId === 'string' ? req.body.analysisId : '';
+    const selection = typeof req.body?.selection === 'string' ? req.body.selection.slice(0, 2000) : '';
+    const context = typeof req.body?.context === 'string' ? req.body.context.slice(0, 300) : '';
+
+    const result = await runChat({ analysisId, messages, selection, context });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 
 /* ---------------- 导出 Markdown ---------------- */
 
