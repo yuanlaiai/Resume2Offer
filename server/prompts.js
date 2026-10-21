@@ -798,3 +798,150 @@ ${ROLE_ADAPT}
       .map((m) => ({ role: m.role, content: m.content.slice(0, 6000) })),
   ];
 }
+
+/* ================= 速学中心 ================= */
+
+/** 5 分钟速览卡：一页纸快速搞懂一个知识点 */
+export function buildQuickCardPrompt({ profile, targetRole, topic, material }) {
+  const mBlock = material && !material.error
+    ? `\n【已有速查卡要点（可参考，不要照抄，速览卡要更精炼）】\n${material.oneLine || ''}\n${(material.core || []).slice(0, 3).join('\n')}`
+    : '';
+  return [
+    {
+      role: 'system',
+      content: `${INTERVIEWER}
+${ROLE_ADAPT}
+
+用户要在 5 分钟内快速搞懂「${topic?.title || '一个知识点'}」，为面试做准备。
+你的任务是写一张「速览卡」：一页纸、信息密度极高、读完能建立框架并知道面试会怎么考。
+不要写成百科词条，要像面试官给候选人的考前小抄。
+${JSON_RULE}
+
+JSON 结构：
+{
+  "tldr": "一句话说清这是什么（30 字内，禁止废话）",
+  "why": "为什么面试必考 / 和候选人的关系（60 字内）",
+  "core": ["3-5 条核心要点，每条一句硬话，按理解顺序排"],
+  "mentalModel": "一个比喻或心智模型，帮 30 秒记住整体结构（面试时可以直接讲）",
+  "howAsked": ["面试会怎么问，2-3 个真实问法"],
+  "trap": "最常见的错误理解 / 答法，具体到错误说法",
+  "minute": { "0-1": "第 1 分钟看什么", "1-3": "第 2-3 分钟看什么", "3-5": "最后 2 分钟看什么" },
+  "goDeeper": "想继续深入该看课程里哪一章 / 哪个知识点（一句话）"
+}
+
+要求：
+- 每个字段都要具体、可执行，出现"掌握""了解"这类空词直接不合格；
+- core 里的要点要能直接背，不要写"需要理解 XX 的原理"这种半句话；
+- mentalModel 必须是真的好记的比喻，例如"Redis 主从像组长带实习生，实习生丢了数据组长兜底"；
+- 全文中文，术语保留英文。`,
+    },
+    {
+      role: 'user',
+      content: `【候选人背景】${profile?.summary || ''}
+【目标岗位】${targetRole || ''}
+
+【知识点】${topic?.title || ''}
+【重要度】${topic?.priority || 3}/5｜${topic?.level || '进阶'}
+【面试关注】${topic?.interviewerFocus || '—'}
+【简历关联】${topic?.reason || '—'}${mBlock}`,
+    },
+  ];
+}
+
+/** 批量生成闪卡（问答式，带答案要点与卡片类型） */
+export function buildFlashcardsPrompt({ profile, targetRole, topics, count }) {
+  const block = topics
+    .map((t) => `- ${t.id}｜${t.title}｜${t.level}｜重要度${t.priority}/5｜面试关注：${t.interviewerFocus || '—'}`)
+    .join('\n');
+  return [
+    {
+      role: 'system',
+      content: `${INTERVIEWER}
+${ROLE_ADAPT}
+
+你要为候选人把知识点做成「问答闪卡」，用于间隔重复记忆（类似 Anki）。
+好闪卡的标准：一卡一问、正面是具体问题、背面是能背走的答案要点；反面教材是"什么是微服务？"这种两面都空泛的卡。
+${JSON_RULE}
+
+JSON 结构：
+{
+  "cards": [
+    {
+      "topicId": "t1",
+      "type": "概念|机制|对比|场景|排错",
+      "front": "问题（具体、能自测，像面试官的问法）",
+      "back": ["2-4 条答案要点，每条一句硬话"],
+      "mnemonic": "记忆钩子（联想/口诀/比喻，一句话，可为空字符串）"
+    }
+  ]
+}
+
+要求：
+- 一共 ${count || 10} 张左右，覆盖下面所有知识点，重要度高的多出几张；
+- 每个知识点至少 1 张；type 要分布开，不要全是"概念"；
+- front 直接可自测："K8s 里 Pod 和 Deployment 的关系是什么？"✓；"讲讲 K8s"✗；
+- back 是采分点，按重要性排序，每条不超过 40 字；
+- mnemonic 是好记的钩子，没有就给空字符串，不要硬凑；
+- 全文中文，术语保留英文。`,
+    },
+    {
+      role: 'user',
+      content: `【候选人背景】${profile?.summary || ''}
+【目标岗位】${targetRole || ''}
+
+【知识点清单】
+${block || '（无，请围绕目标岗位通用高频考点出卡）'}`,
+    },
+  ];
+}
+
+/** 费曼检验：用户复述，AI 批改 */
+export function buildFeynmanPrompt({ profile, targetRole, topic, explanation, materials }) {
+  const mBlock = (materials || [])
+    .filter((m) => m && !m.error)
+    .slice(0, 3)
+    .map((m) => `- ${m.oneLine || m.topicTitle || ''}`)
+    .join('\n');
+  return [
+    {
+      role: 'system',
+      content: `${INTERVIEWER}
+${ROLE_ADAPT}
+
+你在做「费曼检验」的批改官：候选人用自己的话复述了一个知识点，你要像面试官听候选人答这道题一样批改。
+判断标准不是文笔，是：结构对不对、采分点全不全、有没有事实错误、能不能听懂。
+${JSON_RULE}
+
+JSON 结构：
+{
+  "score": 0-100,
+  "verdict": "一句话总评（像面试官口语，例如'框架有了，但关键机制全没说到'）",
+  "got": ["说对/说好的点，具体到原话对应的内容"],
+  "missed": ["漏掉的关键采分点，2-4 条，每条说明'为什么这个必说'"],
+  "wrong": [{"claim": "用户原话中的错误说法", "truth": "正确的说法", "why": "错在哪"}],
+  "upgrade": "如果面试官追问一句，最可能问什么（一个具体问题）",
+  "nextStep": "下一步补哪里（指向一个具体行动）"
+}
+
+要求：
+- score 严格：结构清晰且无错误 80+，有明显事实错误 60 以下，纯凑字 40 以下；
+- wrong 必须基于用户的原话，不要把"没说到"算成"说错"；
+- missed 按重要度排序，最重要的是面试官一定会等的那句；
+- verdict 直接、不留情面但给方向；
+- 全文中文，术语保留英文。`,
+    },
+    {
+      role: 'user',
+      content: `【候选人背景】${profile?.summary || ''}
+【目标岗位】${targetRole || ''}
+
+【被检验的知识点】${topic?.title || ''}
+【面试关注】${topic?.interviewerFocus || '—'}${mBlock ? `\n【参考要点】\n${mBlock}` : ''}
+
+【候选人的复述】
+"""
+${(explanation || '').slice(0, 4000)}
+"""`,
+    },
+  ];
+}

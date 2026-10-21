@@ -15,6 +15,9 @@ import {
   buildCoursePrompt,
   buildLessonPrompt,
   buildChatPrompt,
+  buildQuickCardPrompt,
+  buildFlashcardsPrompt,
+  buildFeynmanPrompt,
   depthSpec,
   courseDepthSpec,
   DEPTHS,
@@ -1176,4 +1179,215 @@ export async function runChat({ analysisId, messages, selection, context }) {
   }
 
   return { reply, analysisId: record?.id || null };
+}
+
+/* ---------------- 速学中心 ---------------- */
+
+const DAY = 24 * 60 * 60 * 1000;
+/** 简化 SM-2：自评 4 档 → 下一次间隔（天） */
+const SRS_INTERVALS = [1, 3, 7, 15, 30];
+
+function normalizeCard(raw, id, topicTitle) {
+  return {
+    id,
+    topicId: str(raw?.topicId),
+    topicTitle: topicTitle || str(raw?.topicId),
+    type: ['概念', '机制', '对比', '场景', '排错'].includes(raw?.type) ? raw.type : '概念',
+    front: str(raw?.front),
+    back: arr(raw?.back).map(str).filter(Boolean).slice(0, 5),
+    mnemonic: str(raw?.mnemonic),
+    // 复习调度
+    stage: 0, // SRS_INTERVALS 下标
+    dueAt: Date.now(), // 立即可复习
+    reviews: 0,
+    lapses: 0,
+    lastAt: null,
+    createdAt: Date.now(),
+  };
+}
+
+/** 生成闪卡：runFlashcards */
+export async function runFlashcards(ctx, { analysisId, count = 12, topicIds = null }) {
+  const record = store.get(analysisId);
+  if (!record) throw new Error('找不到这份简历分析');
+
+  let topics = record.topics || [];
+  if (Array.isArray(topicIds) && topicIds.length) {
+    const set = new Set(topicIds);
+    topics = topics.filter((t) => set.has(t.id));
+  }
+  if (!topics.length) topics = record.topics || [];
+  if (!topics.length) throw new Error('没有可用的知识点，请先完成简历分析');
+
+  ctx.step(0, `正在把 ${topics.length} 个知识点做成闪卡`);
+  const raw = await chatJSON(
+    buildFlashcardsPrompt({
+      profile: record.profile,
+      targetRole: record.targetRole,
+      topics,
+      count: clamp(count, 6, 20, 12),
+    }),
+    { temperature: 0.5, maxTokens: 5000 },
+  );
+
+  const topicTitle = new Map(topics.map((t) => [t.id, t.title]));
+  const existing = new Set((record.flashcards || []).map((c) => c.front));
+  const fresh = [];
+  let n = (record.flashcards || []).length;
+  for (const c of arr(raw?.cards)) {
+    const card = normalizeCard(c, `f${n + 1}`, topicTitle.get(c?.topicId) || '');
+    if (!card.front || existing.has(card.front)) continue;
+    existing.add(card.front);
+    n += 1;
+    fresh.push(card);
+  }
+  if (!fresh.length) throw new Error('没有生成出新卡片，请重试');
+
+  const flashcards = [...(record.flashcards || []), ...fresh];
+  await store.update(analysisId, { flashcards });
+  return { analysisId, added: fresh.length, flashcards };
+}
+
+/** 翻卡自评：grade 0=忘了 1=想很久 2=记得 3=秒答 */
+export async function reviewCard({ analysisId, cardId, grade }) {
+  const record = store.get(analysisId);
+  if (!record) throw new Error('找不到这份简历分析');
+  const card = (record.flashcards || []).find((c) => c.id === cardId);
+  if (!card) throw new Error('找不到这张卡片');
+
+  const g = clamp(grade, 0, 3, 2);
+  if (g === 0) {
+    card.stage = 0;
+    card.lapses += 1;
+  } else {
+    card.stage = Math.min(card.stage + (g >= 2 ? 1 : 0) + 1, SRS_INTERVALS.length - 1);
+  }
+  card.reviews += 1;
+  card.lastAt = Date.now();
+  card.dueAt = Date.now() + SRS_INTERVALS[card.stage] * DAY;
+  card.lastGrade = g;
+
+  await store.update(analysisId, { flashcards: record.flashcards });
+  return { card };
+}
+
+/** 5 分钟速览卡 */
+export async function runQuickCard(ctx, { analysisId, topicId }) {
+  const record = store.get(analysisId);
+  if (!record) throw new Error('找不到这份简历分析');
+  const topic = (record.topics || []).find((t) => t.id === topicId);
+  if (!topic) throw new Error('找不到知识点');
+
+  ctx.step(0, `正在为「${topic.title}」写速览卡`);
+  const material = (record.materials || []).find((m) => m.topicId === topicId && !m.error);
+  const raw = await chatJSON(
+    buildQuickCardPrompt({ profile: record.profile, targetRole: record.targetRole, topic, material }),
+    { temperature: 0.45, maxTokens: 2600 },
+  );
+
+  const card = {
+    topicId,
+    topicTitle: topic.title,
+    tldr: str(raw?.tldr),
+    why: str(raw?.why),
+    core: arr(raw?.core).map(str).filter(Boolean),
+    mentalModel: str(raw?.mentalModel),
+    howAsked: arr(raw?.howAsked).map(str).filter(Boolean),
+    trap: str(raw?.trap),
+    minute: {
+      a: str(raw?.minute?.['0-1']),
+      b: str(raw?.minute?.['1-3']),
+      c: str(raw?.minute?.['3-5']),
+    },
+    goDeeper: str(raw?.goDeeper),
+    createdAt: new Date().toISOString(),
+  };
+  if (!card.tldr && !card.core.length) throw new Error('速览卡生成失败，请重试');
+
+  const quickCards = [...(record.quickCards || []).filter((c) => c.topicId !== topicId), card];
+  await store.update(analysisId, { quickCards });
+  return { analysisId, card, quickCards };
+}
+
+/** 费曼检验：复述 → 批改 */
+export async function runFeynman(ctx, { analysisId, topicId, explanation }) {
+  const record = store.get(analysisId);
+  if (!record) throw new Error('找不到这份简历分析');
+  const topic = (record.topics || []).find((t) => t.id === topicId);
+  if (!topic) throw new Error('找不到知识点');
+  const text = (explanation || '').trim();
+  if (text.length < 10) throw new Error('复述太短了，至少写几十个字才能批改出东西');
+
+  ctx.step(0, '面试官正在批改你的复述');
+  const materials = (record.materials || []).filter((m) => m.topicId === topicId);
+  const raw = await chatJSON(
+    buildFeynmanPrompt({ profile: record.profile, targetRole: record.targetRole, topic, explanation: text, materials }),
+    { temperature: 0.35, maxTokens: 2600 },
+  );
+
+  const grade = {
+    id: `fy${(record.feynman || []).length + 1}`,
+    topicId,
+    topicTitle: topic.title,
+    explanation: text.slice(0, 4000),
+    score: clamp(raw?.score, 0, 100, 0),
+    verdict: str(raw?.verdict),
+    got: arr(raw?.got).map(str).filter(Boolean),
+    missed: arr(raw?.missed).map(str).filter(Boolean),
+    wrong: arr(raw?.wrong)
+      .map((w) => ({ claim: str(w?.claim), truth: str(w?.truth), why: str(w?.why) }))
+      .filter((w) => w.claim || w.truth),
+    upgrade: str(raw?.upgrade),
+    nextStep: str(raw?.nextStep),
+    at: new Date().toISOString(),
+  };
+
+  const feynman = [...(record.feynman || []), grade];
+  await store.update(analysisId, { feynman });
+  return { analysisId, grade, feynman };
+}
+
+/** 每日速学：到期闪卡 + 1 个新知识点建议（不调用模型，直接计算） */
+export function dailyPlan(record) {
+  const now = Date.now();
+  const cards = record.flashcards || [];
+  const due = cards
+    .filter((c) => c.dueAt <= now)
+    .sort((a, b) => a.dueAt - b.dueAt)
+    .slice(0, 5);
+  const upcoming = cards
+    .filter((c) => c.dueAt > now)
+    .sort((a, b) => a.dueAt - b.dueAt)
+    .slice(0, 3)
+    .map((c) => ({ id: c.id, front: c.front, dueIn: Math.ceil((c.dueAt - now) / DAY) }));
+
+  // 新知识点：优先级最高且（无闪卡/无资料/无费曼）覆盖最少的
+  const covered = new Set([
+    ...(record.materials || []).filter((m) => !m.error).map((m) => m.topicId),
+    ...(record.quickCards || []).map((c) => c.topicId),
+    ...(record.feynman || []).map((f) => f.topicId),
+    ...cards.map((c) => c.topicId),
+  ]);
+  const fresh = (record.topics || [])
+    .filter((t) => !covered.has(t.id))
+    .sort((a, b) => b.priority - a.priority)[0] || null;
+
+  // 费曼弱项：最近一次批改 < 70 分的知识点
+  const lastByTopic = new Map();
+  for (const f of record.feynman || []) lastByTopic.set(f.topicId, f);
+  const weak = [...lastByTopic.values()]
+    .filter((f) => f.score < 70)
+    .sort((a, b) => a.score - b.score)
+    .slice(0, 2)
+    .map((f) => ({ topicId: f.topicId, topicTitle: f.topicTitle, score: f.score }));
+
+  return {
+    due,
+    dueCount: due.length,
+    upcoming,
+    freshTopic: fresh,
+    weakTopics: weak,
+    totalCards: cards.length,
+    mastered: cards.filter((c) => c.stage >= SRS_INTERVALS.length - 1).length,
+  };
 }

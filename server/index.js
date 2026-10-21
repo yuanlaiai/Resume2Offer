@@ -9,7 +9,7 @@ import { startJob, getJob } from './jobs.js';
 import { extractResume, normalizeText } from './extract.js';
 import { fixFileName } from './filename.js';
 import { describeLLM, LLMError } from './llm.js';
-import { runAnalyze, runMaterials, runQuiz, runGrade, runPlan, runExpand, runReport, runCourses, runLessons, runChat, prefillRole } from './pipeline.js';
+import { runAnalyze, runMaterials, runQuiz, runGrade, runPlan, runExpand, runReport, runCourses, runLessons, runChat, prefillRole, runFlashcards, reviewCard, runQuickCard, runFeynman, dailyPlan } from './pipeline.js';
 import { toMarkdown, materialMarkdown, reportMarkdown, courseMarkdown, lessonMarkdown } from './export.js';
 
 const app = express();
@@ -229,6 +229,58 @@ app.post('/api/analyses/:id/report', (req, res, next) => {
 });
 
 /* ---------------- 任务进度 ---------------- */
+
+/* ---------------- 速学中心 ---------------- */
+
+// 闪卡批量生成（任务）
+app.post('/api/analyses/:id/flashcards', (req, res, next) => {
+  const record = store.get(req.params.id);
+  if (!record) return res.status(404).json({ error: '记录不存在' });
+  const count = Number(req.body?.count) || 12;
+  const topicIds = Array.isArray(req.body?.topicIds) ? req.body.topicIds.map(String) : null;
+  const jobId = startJob(['生成闪卡'], (ctx) => runFlashcards(ctx, { analysisId: record.id, count, topicIds }));
+  res.json({ jobId });
+});
+
+// 翻卡自评（直接响应）
+app.post('/api/analyses/:id/flashcards/:cardId/review', async (req, res) => {
+  const record = store.get(req.params.id);
+  if (!record) return res.status(404).json({ error: '记录不存在' });
+  try {
+    const { card } = await reviewCard({ analysisId: record.id, cardId: req.params.cardId, grade: req.body?.grade });
+    res.json({ card });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// 5 分钟速览卡（任务）
+app.post('/api/analyses/:id/quickcard', (req, res, next) => {
+  const record = store.get(req.params.id);
+  if (!record) return res.status(404).json({ error: '记录不存在' });
+  const topicId = String(req.body?.topicId || '');
+  if (!topicId) return res.status(400).json({ error: '缺少 topicId' });
+  const jobId = startJob(['生成速览卡'], (ctx) => runQuickCard(ctx, { analysisId: record.id, topicId }));
+  res.json({ jobId });
+});
+
+// 费曼检验（任务）
+app.post('/api/analyses/:id/feynman', (req, res, next) => {
+  const record = store.get(req.params.id);
+  if (!record) return res.status(404).json({ error: '记录不存在' });
+  const topicId = String(req.body?.topicId || '');
+  const explanation = String(req.body?.explanation || '');
+  if (!topicId) return res.status(400).json({ error: '缺少 topicId' });
+  const jobId = startJob(['批改复述'], (ctx) => runFeynman(ctx, { analysisId: record.id, topicId, explanation }));
+  res.json({ jobId });
+});
+
+// 每日速学（直接计算）
+app.get('/api/analyses/:id/daily', (req, res) => {
+  const record = store.get(req.params.id);
+  if (!record) return res.status(404).json({ error: '记录不存在' });
+  res.json(dailyPlan(record));
+});
 
 app.get('/api/jobs/:id', (req, res) => {
   const job = getJob(req.params.id);

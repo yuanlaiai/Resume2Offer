@@ -731,6 +731,7 @@ async function deleteRecord(id) {
 
 const TABS = [
   { key: 'profile', label: '简历画像' },
+  { key: 'study', label: '速学' },
   { key: 'courses', label: '系统课程' },
   { key: 'topics', label: '知识点图谱' },
   { key: 'materials', label: '复习资料' },
@@ -771,7 +772,7 @@ async function openAnalysis(id) {
       state.pendingAuto = 0;
       setTimeout(() => autoBuildCourses(), 200);
       if (!(record.materials || []).filter((m) => !m.error).length) {
-        setTimeout(() => generateTop(n), 300);
+        setTimeout(() => generateTop(n, true), 300);
       }
     }
   } catch (err) {
@@ -858,6 +859,7 @@ function renderPanel() {
   if (!panel) return;
   const fn = {
     profile: panelProfile,
+    study: panelStudy,
     courses: panelCourses,
     topics: panelTopics,
     materials: panelMaterials,
@@ -871,6 +873,7 @@ function renderPanel() {
   void panel.offsetWidth;
   panel.style.animation = '';
   if (state.tab === 'profile') bindProfile();
+  if (state.tab === 'study') bindStudy();
   if (state.tab === 'courses') bindCourses();
   if (state.tab === 'topics') bindTopics();
   if (state.tab === 'materials') bindMaterials();
@@ -2527,25 +2530,28 @@ async function generateMaterials(all = false, onlyIds = null, opts = {}) {
         : [`按「${DEPTH_LABEL[state.depth]}」生成`, '检索资料并把来源一并保存'],
     );
     await refreshRecord();
-    state.tab = 'materials';
-    state.materialId = ids[0];
+    if (!opts.silent) {
+      state.tab = 'materials';
+      state.materialId = ids[0];
+    }
     state.viewVersion = 0;
     state.historyOpen = false;
     renderWorkspace();
-    toast(rewriting ? '已按新深度重写' : '资料已生成');
+    if (state.tab === 'materials') toast(rewriting ? '已按新深度重写' : '资料已生成');
+    else toast(`资料已生成，可到「复习资料」查看`);
   } catch (err) {
     /* 浮层已提示 */
   }
 }
 
-/** 自动生成优先级最高的 N 个模块 */
-async function generateTop(n = 5) {
+/** 自动生成优先级最高的 N 个模块（silent：不切换页面，仅后台生成） */
+async function generateTop(n = 5, silent = false) {
   const r = state.record;
   if (!r) return;
   const generated = new Set((r.materials || []).filter((m) => !m.error).map((m) => m.topicId));
   const ids = sortedTopics().filter((t) => !generated.has(t.id)).slice(0, n).map((t) => t.id);
   if (!ids.length) return toast('优先级最高的模块都已有资料了');
-  await generateMaterials(false, ids);
+  await generateMaterials(false, ids, { silent });
 }
 
 async function generateReport() {
@@ -2662,6 +2668,7 @@ const chat = {
 
 const TAB_LABEL = {
   profile: '简历画像',
+  study: '速学',
   topics: '知识点图谱',
   courses: '系统课程',
   materials: '复习资料',
@@ -2875,3 +2882,365 @@ document.addEventListener('keydown', (e) => {
     renderChat();
   }
 });
+
+/* ---------------- 速学中心（闪卡 / 速览卡 / 费曼检验 / 每日速学） ---------------- */
+
+const study = { daily: null, fcIdx: 0, fcBack: false, busy: false };
+
+const GRADE_BTNS = [
+  { g: 0, label: '忘了', cls: 'g0' },
+  { g: 1, label: '想了很久', cls: 'g1' },
+  { g: 2, label: '记得', cls: 'g2' },
+  { g: 3, label: '秒答', cls: 'g3' },
+];
+const DUE_IN_LABEL = (d) => (d <= 0 ? '现在' : d === 1 ? '明天' : `${d} 天后`);
+
+async function fetchDaily() {
+  if (!state.record) return;
+  try {
+    study.daily = await api(`/api/analyses/${state.record.id}/daily`);
+  } catch {
+    study.daily = null;
+  }
+}
+
+function panelStudy() {
+  const r = state.record || {};
+  const cards = r.flashcards || [];
+  const d = study.daily;
+  const dueCount = d ? d.dueCount : cards.filter((c) => c.dueAt <= Date.now()).length;
+
+  const hero = `
+    <div class="study-hero card">
+      <div class="study-hero-main">
+        <div class="eyebrow">每日速学</div>
+        <h2>今天先刷 ${Math.max(dueCount, 0)} 张到期卡，再攻一个新知识点</h2>
+        <p class="study-sub">间隔重复 + 费曼检验：少量高频，把短期记忆炼成长期能力。</p>
+      </div>
+      <div class="study-stats">
+        <div class="ss-item"><b>${cards.length}</b><span>闪卡总数</span></div>
+        <div class="ss-item hot"><b>${Math.max(dueCount, 0)}</b><span>到期待复习</span></div>
+        <div class="ss-item"><b>${d ? d.mastered : 0}</b><span>已长期掌握</span></div>
+      </div>
+    </div>`;
+
+  const fcSection = cards.length
+    ? `<div id="fc-stage"></div>`
+    : `<div class="card study-block">
+        <h3>🃏 闪卡记忆</h3>
+        <p class="study-desc">把你的知识点做成问答闪卡：正面是面试官的问法，背面是采分点。按遗忘曲线安排复习，答完翻卡自评，忘了就重来。</p>
+        <button class="btn btn-brand" data-gen-fc>生成第一批闪卡（约 12 张）</button>
+      </div>`;
+
+  const topicOpts = (selected) =>
+    (r.topics || [])
+      .map((t) => `<option value="${t.id}" ${t.id === selected ? 'selected' : ''}>${esc(t.title)}（P${t.priority}）</option>`)
+      .join('');
+
+  const quickCards = r.quickCards || [];
+  const quickSection = `
+    <div class="card study-block">
+      <h3>⚡ 5 分钟速览卡</h3>
+      <p class="study-desc">拿到一个陌生知识点，5 分钟建立框架：是什么 → 为什么必考 → 核心机制 → 面试怎么问 → 最容易错在哪。</p>
+      <div class="study-form-row">
+        <select id="qc-topic" class="input">${topicOpts(study.qcTopic)}</select>
+        <button class="btn btn-ghost" data-gen-qc>生成速览卡</button>
+      </div>
+      <div id="qc-list">
+        ${quickCards.length ? quickCards.map(quickCardHtml).join('') : ''}
+      </div>
+    </div>`;
+
+  const feynman = r.feynman || [];
+  const feynSection = `
+    <div class="card study-block">
+      <h3>🎤 费曼检验</h3>
+      <p class="study-desc">用自己的话把一个知识点讲一遍，AI 像面试官一样批改：说对了什么、漏了什么、错在哪、下一句追问会是什么。</p>
+      <div class="study-form-row">
+        <select id="fy-topic" class="input">${topicOpts(study.fyTopic)}</select>
+      </div>
+      <textarea id="fy-text" class="input" rows="5" placeholder="用你自己的话讲清楚这个知识点，像面试现场作答一样……（至少几十个字）"></textarea>
+      <div class="study-form-row">
+        <button class="btn btn-brand" data-feynman>提交复述，等批改</button>
+        <span class="study-hint">建议口述后凭记忆打字，检验的是「讲出来」而不是「看得懂」。</span>
+      </div>
+      <div id="fy-list">${feynman.length ? feynman.slice().reverse().map(feynmanHtml).join('') : ''}</div>
+    </div>`;
+
+  return `${hero}<div class="study-daily" id="study-daily"></div>${fcSection}${quickSection}${feynSection}`;
+}
+
+function quickCardHtml(c) {
+  return `
+    <details class="qc-card" data-qc="${c.topicId}">
+      <summary>
+        <b>${esc(c.topicTitle)}</b>
+        <span class="qc-tldr">${esc(c.tldr)}</span>
+      </summary>
+      <div class="qc-body">
+        <p class="qc-why">${esc(c.why)}</p>
+        <ol class="qc-core">${(c.core || []).map((x) => `<li>${esc(x)}</li>`).join('')}</ol>
+        ${c.mentalModel ? `<div class="qc-model">🧠 <b>心智模型</b>：${esc(c.mentalModel)}</div>` : ''}
+        ${(c.howAsked || []).length ? `<div class="qc-asked"><b>面试会怎么问</b><ul>${c.howAsked.map((q) => `<li>${esc(q)}</li>`).join('')}</ul></div>` : ''}
+        ${c.trap ? `<div class="qc-trap">⚠️ 最容易错：${esc(c.trap)}</div>` : ''}
+        ${(c.minute && (c.minute.a || c.minute.b || c.minute.c)) ? `
+          <div class="qc-minute">
+            <span><b>0-1min</b>${esc(c.minute.a)}</span>
+            <span><b>1-3min</b>${esc(c.minute.b)}</span>
+            <span><b>3-5min</b>${esc(c.minute.c)}</span>
+          </div>` : ''}
+        ${c.goDeeper ? `<p class="qc-deeper">👉 ${esc(c.goDeeper)}</p>` : ''}
+      </div>
+    </details>`;
+}
+
+function feynmanHtml(g) {
+  return `
+    <details class="fy-card" data-fy="${g.id}">
+      <summary>
+        <span class="fy-score ${g.score >= 80 ? 'hi' : g.score >= 60 ? 'mid' : 'lo'}">${g.score}</span>
+        <b>${esc(g.topicTitle)}</b>
+        <span class="fy-verdict">${esc(g.verdict)}</span>
+      </summary>
+      <div class="fy-body">
+        <div class="fy-grid">
+          <div class="fy-col ok"><b>✓ 说对了</b><ul>${(g.got || []).map((x) => `<li>${esc(x)}</li>`).join('') || '<li class="dim">—</li>'}</ul></div>
+          <div class="fy-col miss"><b>△ 漏了</b><ul>${(g.missed || []).map((x) => `<li>${esc(x)}</li>`).join('') || '<li class="dim">—</li>'}</ul></div>
+          <div class="fy-col wrong"><b>✗ 说错了</b>
+            <ul>${(g.wrong || []).map((w) => `<li>「${esc(w.claim)}」→ <b>${esc(w.truth)}</b>${w.why ? `<br><span class="dim">${esc(w.why)}</span>` : ''}</li>`).join('') || '<li class="dim">—</li>'}</ul>
+          </div>
+        </div>
+        ${g.upgrade ? `<div class="fy-upgrade">面试官追问：<b>${esc(g.upgrade)}</b></div>` : ''}
+        ${g.nextStep ? `<p class="fy-next">👉 ${esc(g.nextStep)}</p>` : ''}
+      </div>
+    </details>`;
+}
+
+function flashcardHtml(c) {
+  const back = c.back || [];
+  return `
+    <div class="fc-stage ${study.fcBack ? 'show-back' : ''}" data-fc="${c.id}">
+      <div class="fc-meta"><span class="fc-type">${esc(c.type)}</span><span class="fc-topic">${esc(c.topicTitle || '')}</span><span class="fc-count">第 ${study.fcIdx + 1} / ${study.daily.due.length} 张</span></div>
+      <div class="fc-card" data-flip>
+        <div class="fc-front"><p>${esc(c.front)}</p></div>
+        ${study.fcBack ? `
+          <div class="fc-back">
+            <ul>${back.map((b) => `<li>${esc(b)}</li>`).join('')}</ul>
+            ${c.mnemonic ? `<div class="fc-mne">🪝 ${esc(c.mnemonic)}</div>` : ''}
+          </div>` : ''}
+      </div>
+      ${study.fcBack
+        ? `<div class="fc-grades">${GRADE_BTNS.map((g) => `<button class="fc-grade ${g.cls}" data-grade="${g.g}">${g.label}<small>${g.g === 0 ? '1 天后再来' : g.g === 1 ? '3 天后' : g.g === 2 ? '7 天后' : '30 天后'}</small></button>`).join('')}</div>`
+        : `<button class="btn btn-brand fc-reveal" data-flip>翻卡看答案</button>`}
+    </div>`;
+}
+
+function renderFcStage() {
+  const el = document.getElementById('fc-stage');
+  if (!el || !study.daily) return;
+  const due = study.daily.due || [];
+  if (study.fcIdx >= due.length) {
+    el.innerHTML = `
+      <div class="card study-block fc-done">
+        <h3>🎉 到期卡已刷完</h3>
+        <p class="study-desc">今天安排的复习完成了。下一批到期：${(study.daily.upcoming || []).map((u) => `${DUE_IN_LABEL(u.dueIn)}「${esc(u.front.slice(0, 18))}…」`).join('、') || '—'}</p>
+        <button class="btn btn-ghost" data-gen-fc>再生成一批新卡</button>
+      </div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="card study-block">
+      <h3>🃏 闪卡复习</h3>
+      ${flashcardHtml(due[study.fcIdx])}
+    </div>`;
+}
+
+function renderDaily() {
+  const el = document.getElementById('study-daily');
+  if (!el || !study.daily) return;
+  const d = study.daily;
+  const parts = [];
+  if (d.freshTopic) {
+    parts.push(`
+      <div class="daily-row">
+        <div class="daily-ic">🌱</div>
+        <div class="daily-main">
+          <b>今日新知识点：${esc(d.freshTopic.title)}</b>
+          <p>${esc(d.freshTopic.reason || '优先级最高、但你还没系统学过的考点')}</p>
+        </div>
+        <div class="daily-acts">
+          <button class="btn btn-brand btn-sm" data-qc-topic="${d.freshTopic.id}">5 分钟速览</button>
+          <button class="btn btn-ghost btn-sm" data-mat-topic="${d.freshTopic.id}">生成资料</button>
+        </div>
+      </div>`);
+  }
+  for (const w of d.weakTopics || []) {
+    parts.push(`
+      <div class="daily-row warn">
+        <div class="daily-ic">🎯</div>
+        <div class="daily-main">
+          <b>费曼弱项：${esc(w.topicTitle)}（${w.score} 分）</b>
+          <p>上次复述被批出漏洞，今天再讲一遍试试。</p>
+        </div>
+        <div class="daily-acts"><button class="btn btn-ghost btn-sm" data-fy-topic="${w.topicId}">重新费曼</button></div>
+      </div>`);
+  }
+  if ((d.upcoming || []).length && d.dueCount === 0) {
+    parts.push(`
+      <div class="daily-row ok">
+        <div class="daily-ic">✅</div>
+        <div class="daily-main"><b>没有到期卡片</b><p>下一张：${DUE_IN_LABEL(d.upcoming[0].dueIn)}。可以先攻上面的新知识点。</p></div>
+      </div>`);
+  }
+  el.innerHTML = parts.join('');
+}
+
+async function refreshStudy() {
+  await fetchDaily();
+  renderDaily();
+  renderFcStage();
+}
+
+function bindStudy() {
+  study.fcBack = false;
+  study.fcIdx = 0;
+  refreshStudy();
+}
+
+/* 速学交互：一次绑定、事件委托（面板/卡片会反复重渲染） */
+let studyDelegated = false;
+function bindStudyOnce() {
+  if (studyDelegated) return;
+  studyDelegated = true;
+
+  document.addEventListener('click', (e) => {
+    if (state.tab !== 'study' || !state.record) return;
+    const hit = (sel) => e.target.closest?.(sel);
+    const panel = document.getElementById('panel');
+
+    // 生成闪卡
+    if (hit('[data-gen-fc]')) {
+      if (study.busy) return;
+      study.busy = true;
+      runJob(
+        api(`/api/analyses/${state.record.id}/flashcards`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 12 }) }),
+        '生成闪卡', ['把知识点做成问答卡'],
+      )
+        .then(async (res) => {
+          state.record.flashcards = res.flashcards;
+          study.fcIdx = 0;
+          study.fcBack = false;
+          renderPanel(); // 空态分支没有 #fc-stage 容器，整面板重渲染
+          await refreshStudy();
+        })
+        .catch(() => {})
+        .finally(() => { study.busy = false; });
+      return;
+    }
+
+    // 翻卡
+    if (hit('[data-flip]')) {
+      study.fcBack = true;
+      renderFcStage();
+      return;
+    }
+
+    // 自评
+    const gradeBtn = hit('[data-grade]');
+    if (gradeBtn) {
+      const stage = gradeBtn.closest('[data-fc]');
+      const cardId = stage?.dataset.fc;
+      if (!cardId) return;
+      gradeBtn.disabled = true;
+      api(`/api/analyses/${state.record.id}/flashcards/${cardId}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grade: Number(gradeBtn.dataset.grade) }),
+      })
+        .then(() => {
+          const card = study.daily?.due?.[study.fcIdx];
+          const g = Number(gradeBtn.dataset.grade);
+          if (card) card.stage = g === 0 ? 0 : Math.min((card.stage || 0) + (g >= 2 ? 2 : 1), 4);
+          study.fcIdx += 1;
+          study.fcBack = false;
+          renderFcStage();
+          fetchDaily().then(renderDaily);
+        })
+        .catch((err) => {
+          gradeBtn.disabled = false;
+          toast(err.message || '提交失败');
+        });
+      return;
+    }
+
+    // 生成速览卡
+    if (hit('[data-gen-qc]')) {
+      const topicId = panel?.querySelector('#qc-topic')?.value;
+      if (!topicId) return;
+      study.qcTopic = topicId;
+      runJob(
+        api(`/api/analyses/${state.record.id}/quickcard`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topicId }) }),
+        '生成速览卡', ['5 分钟速览卡'],
+      )
+        .then((res) => {
+          state.record.quickCards = res.quickCards;
+          const list = panel.querySelector('#qc-list');
+          const existing = list.querySelector(`[data-qc="${topicId}"]`);
+          const html = quickCardHtml(res.card);
+          if (existing) existing.outerHTML = html;
+          else list.insertAdjacentHTML('afterbegin', html);
+          list.querySelector(`[data-qc="${topicId}"]`)?.setAttribute('open', '');
+          refreshStudy();
+        })
+        .catch(() => {});
+      return;
+    }
+
+    // 费曼检验
+    if (hit('[data-feynman]')) {
+      const topicId = panel?.querySelector('#fy-topic')?.value;
+      const explanation = panel?.querySelector('#fy-text')?.value.trim();
+      if (!topicId) return;
+      if (!explanation || explanation.length < 10) return toast('复述太短了，多写几句再提交');
+      study.fyTopic = topicId;
+      runJob(
+        api(`/api/analyses/${state.record.id}/feynman`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topicId, explanation }) }),
+        '费曼批改', ['面试官批改中'],
+      )
+        .then((res) => {
+          state.record.feynman = res.feynman;
+          const ta = panel.querySelector('#fy-text');
+          if (ta) ta.value = '';
+          const list = panel.querySelector('#fy-list');
+          list.insertAdjacentHTML('afterbegin', feynmanHtml(res.grade));
+          list.firstElementChild.setAttribute('open', '');
+          refreshStudy();
+        })
+        .catch(() => {});
+      return;
+    }
+
+    // 每日速学行内按钮
+    const qcJump = hit('[data-qc-topic]');
+    if (qcJump) {
+      study.qcTopic = qcJump.dataset.qcTopic;
+      const sel = panel?.querySelector('#qc-topic');
+      if (sel) sel.value = study.qcTopic;
+      sel?.closest('.study-block').scrollIntoView({ behavior: 'smooth' });
+      return;
+    }
+    const fyJump = hit('[data-fy-topic]');
+    if (fyJump) {
+      study.fyTopic = fyJump.dataset.fyTopic;
+      const sel = panel?.querySelector('#fy-topic');
+      if (sel) sel.value = study.fyTopic;
+      sel?.closest('.study-block').scrollIntoView({ behavior: 'smooth' });
+      return;
+    }
+    const matJump = hit('[data-mat-topic]');
+    if (matJump) {
+      generateMaterials(false, [matJump.dataset.matTopic]);
+    }
+  });
+}
+bindStudyOnce();

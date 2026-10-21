@@ -190,6 +190,22 @@ const chatRec = await j(`/api/analyses/${an.analysisId}`);
 if (!(chatRec.chats || []).length) throw new Error('随问对话没有落库');
 console.log(`   ok: 两轮回答 ${chat1.reply.length}/${chat2.reply.length} 字，落库 ${chatRec.chats.length} 条`);
 
+console.log('7d) 速学中心（闪卡 / 速览卡 / 费曼 / 每日速学）...');
+const fc = await waitJob((await j(`/api/analyses/${an.analysisId}/flashcards`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 8 }) })).jobId);
+if (!fc.added) throw new Error('闪卡没有生成');
+const fcCard = fc.flashcards[0];
+const reviewed = await j(`/api/analyses/${an.analysisId}/flashcards/${fcCard.id}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ grade: 2 }) });
+if (!reviewed.card?.dueAt) throw new Error('翻卡自评失败');
+const qc = await waitJob((await j(`/api/analyses/${an.analysisId}/quickcard`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topicId: an.topics[0].id }) })).jobId);
+if (!qc.card?.tldr) throw new Error('速览卡没有生成');
+const fy = await waitJob((await j(`/api/analyses/${an.analysisId}/feynman`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topicId: an.topics[0].id, explanation: '这个知识点主要是为了提升性能，把数据放在内存里，查询就快了， 项目里我们也用它做过缓存。' }) })).jobId);
+if (typeof fy.grade?.score !== 'number') throw new Error('费曼批改失败');
+const daily = await j(`/api/analyses/${an.analysisId}/daily`);
+console.log(
+  `   ok: cards=${fc.added} due=${daily.dueCount}/${daily.totalCards} mastered=${daily.mastered} ` +
+  `qc="${qc.card.tldr.slice(0, 18)}…" fy=${fy.grade.score}分 weak=${daily.weakTopics.length} fresh=${daily.freshTopic ? daily.freshTopic.title.slice(0, 12) : '—'}`,
+);
+
 console.log('8) export.md & list...');
 const md = await fetch(`${BASE}/api/analyses/${an.analysisId}/export.md`);
 const mdText = await md.text();
