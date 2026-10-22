@@ -1045,7 +1045,7 @@ function panelCourses() {
   if (!courses.length) {
     return `<div class="card course-empty">
       <div class="card-title">系统课程<span class="line"></span></div>
-      <p class="course-empty-desc">按简历里的每个技术大类，各排一门「从入门到精通」的课：4 个阶段、8-14 章，每章都能生成完整讲义。不再是一堆零散考点。</p>
+      <p class="course-empty-desc">按简历里的每个技术大类，各排一门「从入门到精通」的课：4 个阶段、每阶段 5-6 章（全书 20-24 章），每章都能生成完整讲义。不再是一堆零散考点。</p>
       <div class="course-empty-actions">
         <button class="btn btn-brand" data-action="courses-all">一键排课（全部 ${groups.length} 类）</button>
       </div>
@@ -1112,6 +1112,7 @@ function courseOverview(course, courses) {
           </div>
           <button class="btn btn-brand btn-sm" id="gen-remaining" ${stats.done >= stats.total ? 'disabled' : ''}>补齐讲义（每次最多 4 章）</button>
           <span class="spacer"></span>
+          <button class="btn btn-ghost btn-sm" id="regen-course" title="按当前标准重排这门课的大纲（同名章节的讲义会保留）">重排大纲</button>
           <button class="btn btn-ghost btn-sm" id="dl-course">下载整门课</button>
           <button class="btn btn-ghost btn-sm" id="print-course">打印</button>
         </div>
@@ -1336,6 +1337,18 @@ function bindCourses() {
 
   const remaining = document.getElementById('gen-remaining');
   if (remaining) remaining.addEventListener('click', () => generateLessons());
+
+  const regen = document.getElementById('regen-course');
+  if (regen) {
+    regen.addEventListener('click', () => {
+      const course = currentCourse();
+      if (!course) return;
+      const ok = window.confirm(
+        `按当前标准重排「${course.group}」的大纲（4 阶段 × 5-6 章）？\n\n同名章节的讲义会保留，标题变了的章节需要重新生成讲义。`,
+      );
+      if (ok) generateCourses([course.group]);
+    });
+  }
 
   // 课程目录上的深度切换：只影响后续生成，不自动重写
   document.querySelectorAll('#lesson-depth [data-depth]').forEach((btn) => {
@@ -2375,7 +2388,7 @@ async function generateCourses(names = null) {
         body: JSON.stringify(names?.length ? { names } : { auto: false }),
       }),
       one ? `正在排「${one}」的课程` : '正在按技术大类排课',
-      one ? ['按 4 阶段排课', '把考点排成从入门到精通的章节'] : ['每个技术大类一门课', '4 阶段 / 8-14 章'],
+      one ? ['按 4 阶段排课', '每阶段 5-6 章，铺满面试面'] : ['每个技术大类一门课', '4 阶段 / 20-24 章'],
     );
     await refreshRecord();
     const list = state.record.courses || [];

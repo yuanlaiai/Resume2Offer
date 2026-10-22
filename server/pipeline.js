@@ -488,8 +488,9 @@ function fallbackCourse(group, existing) {
     .slice()
     .sort((a, b) => (rank[a.level] ?? 1) - (rank[b.level] ?? 1) || (b.priority || 0) - (a.priority || 0));
 
-  const per = Math.ceil(topics.length / 3) || 1;
-  const chunks = [topics.slice(0, per), topics.slice(per, per * 2), topics.slice(per * 2)];
+  // 兜底也按 4 阶段铺（入门/进阶/实战/精通）；考点太少时空阶段会被过滤掉
+  const per = Math.max(1, Math.ceil(topics.length / 4));
+  const chunks = [0, 1, 2, 3].map((i) => topics.slice(per * i, per * (i + 1)));
   let n = 0;
 
   const stages = chunks
@@ -546,7 +547,7 @@ function normalizeCourse(raw, { group, existing }) {
     .slice(0, 4)
     .map((s, i) => {
       const chapters = arr(s?.chapters)
-        .slice(0, 5)
+        .slice(0, 7)
         .map((ch) => {
           chNo += 1;
           return {
@@ -644,17 +645,25 @@ export async function runCourses(ctx, { analysisId, names, auto = false }) {
   let finished = 0;
 
   await pool(targets, 2, async (group, i) => {
+    const ask = (compact) =>
+      buildCoursePrompt({
+        profile: record.profile,
+        group,
+        targetRole: record.targetRole,
+        level: record.level,
+        stackItem: findStackItem(stack, group.name),
+        compact,
+      });
     try {
-      const raw = await chatJSON(
-        buildCoursePrompt({
-          profile: record.profile,
-          group,
-          targetRole: record.targetRole,
-          level: record.level,
-          stackItem: findStackItem(stack, group.name),
-        }),
-        { temperature: 0.35, maxTokens: 7000 },
-      );
+      let raw;
+      try {
+        raw = await chatJSON(ask(false), { temperature: 0.35, maxTokens: 12000 });
+      } catch (err) {
+        // 章数多时个别模型会截断：降一档章数再试一次，总比这门课直接失败好
+        if (err?.code !== 'BAD_JSON') throw err;
+        console.warn(`[courses] ${group.name} 大纲过长，降级为精简版重试：`, err.message);
+        raw = await chatJSON(ask(true), { temperature: 0.3, maxTokens: 9000 });
+      }
       results[i] = normalizeCourse(raw, { group, existing: existing.get(group.name) });
     } catch (err) {
       console.error(`[courses] ${group.name} 排课失败：`, err.message);

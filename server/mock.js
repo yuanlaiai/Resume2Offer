@@ -917,34 +917,46 @@ function mockCourse(name) {
   const stages = [
     {
       name: '入门',
-      goal: `建立 ${name} 的整体心智模型，能说清它解决什么问题`,
+      goal: `建立 ${name} 的整体心智模型，能说清它解决什么问题、怎么最快跑起来`,
       chapters: [
-        chapter(`${name} 知识地图与最小可用`, pick(0), '基础'),
-        chapter(`${name} 常用工具链与上手路径`, pick(1), '基础'),
+        chapter(`${name} 知识地图与核心概念`, pick(0), '基础'),
+        chapter(`${name} 环境搭建与最小可运行`, null, '基础'),
+        chapter(`${name} 最常用 API 与配置项`, pick(1), '基础'),
+        chapter(`${name} 数据模型与关键术语`, null, '基础'),
+        chapter(`第一个 ${name} 小项目：从零跑通到能演示`, null, '基础'),
       ],
     },
     {
       name: '进阶',
-      goal: `讲透核心机制、参数与适用边界`,
+      goal: `讲透核心机制、参数取舍与适用边界，能解释"为什么这样设计"`,
       chapters: [
         chapter(`${name} 核心机制拆解`, pick(2), '进阶'),
         chapter(`${name} 关键参数与边界条件`, pick(3), '进阶'),
+        chapter(`${name} 性能特征与容量估算`, null, '进阶'),
+        chapter(`${name} 常见误区与踩坑清单`, null, '进阶'),
+        chapter(`${name} 与相邻技术的边界和替换成本`, null, '进阶'),
       ],
     },
     {
       name: '实战',
-      goal: `把知识落到简历里的真实项目与线上排障`,
+      goal: `把知识落到简历里的真实项目与线上排障，能拿出可复述的现场`,
       chapters: [
         chapter(`${name} 项目落地：从方案到上线`, pick(4), '进阶'),
         chapter(`${name} 线上故障定位与止损`, null, '深度'),
+        chapter(`${name} 压测、监控与告警设计`, null, '进阶'),
+        chapter(`${name} 变更、灰度与回滚`, null, '进阶'),
+        chapter(`${name} 团队协作与规范落地`, null, '进阶'),
       ],
     },
     {
       name: '精通',
-      goal: `扛住压力面：选型、权衡、反向输出`,
+      goal: `扛住压力面：源码、选型、架构演进与反向输出`,
       chapters: [
+        chapter(`${name} 源码与内核级机制`, null, '深度'),
         chapter(`${name} 选型对比与架构取舍`, null, '深度'),
+        chapter(`${name} 极端场景与容量天花板`, null, '深度'),
         chapter(`${name} 压力面模拟：连续追问 5 轮`, null, '深度'),
+        chapter(`${name} 体系答辩：讲给面试官听的技术判断`, null, '深度'),
       ],
     },
   ];
@@ -953,7 +965,7 @@ function mockCourse(name) {
     title: `${name} 面试系统课：从入门到精通`,
     subtitle: `把零散考点串成一条能学完、能自检的路径`,
     outcome: `学完能独立讲清 ${name} 的体系，并接住机制与项目追问`,
-    totalHours: 16,
+    totalHours: 40,
     interviewWeight: 5,
     stages,
   };

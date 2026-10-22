@@ -606,10 +606,17 @@ export function courseDepthSpec(depth) {
 }
 
 /** 为一个技术大类排「从入门到精通」的系统课 */
-export function buildCoursePrompt({ profile, group, targetRole, level, stackItem }) {
+export function buildCoursePrompt({ profile, group, targetRole, level, stackItem, compact = false }) {
   const topics = (group?.topics || [])
     .map((t) => `- ${t.id}｜${t.title}｜${t.level}｜重要度${t.priority}/5${t.gap ? '｜简历缺口' : ''}`)
     .join('\n');
+
+  const scale = compact
+    ? `- 固定 4 个阶段，name 依次是「入门」「进阶」「实战」「精通」；每阶段 4 章，全书 16 章。
+- 字段从简：why ≤ 25 字，keyQuestions 2 条，checkpoints 1 条，goal ≤ 20 字。`
+    : `- 固定 4 个阶段，name 依次是「入门」「进阶」「实战」「精通」；**每阶段 5-6 章，全书 20-24 章**（少于 20 章视为不合格）。
+- 每个阶段都要铺满该阶段该管的面试面，不要只用 3 章草草带过；宁可多拆一个真实话题面，也不要把一章写成大杂烩。
+- 字段保持精炼（深度交给后续讲义）：why ≤ 40 字，keyQuestions 2-3 条，checkpoints 2 条，goal ≤ 30 字。`;
 
   return [
     {
@@ -640,8 +647,8 @@ JSON 结构：
           "level": "基础|进阶|深度",
           "hours": 0.5-4,
           "prereq": ["前置章节标题"],
-          "keyQuestions": ["面试会怎么问，2-4 个"],
-          "checkpoints": ["通关标准，2-3 条，可自检"],
+          "keyQuestions": ["面试会怎么问，2-3 个"],
+          "checkpoints": ["通关标准，2 条，可自检"],
           "topicIds": ["t1", "t3"]
         }
       ]
@@ -650,10 +657,15 @@ JSON 结构：
 }
 
 硬性要求：
-- 固定 4 个阶段，name 依次是「入门」「进阶」「实战」「精通」；每阶段 2-4 章，全书 8-14 章。
+${scale}
 - 章节顺序就是学习顺序；prereq 只能引用本课程里更靠前的章节标题。
-- 阶段分工：入门建立概念与最小可用；进阶讲原理、边界与常见坑；实战绑定候选人简历里的项目与线上排障；精通讲选型、机制/源码、压力面追问。
-- **必须尽量复用下面给出的考点**：topicIds 只能填清单里真实存在的 id，可多选；实在没有对应考点才留空数组。
+- 阶段分工（每阶段都要按这个宽度铺开，不是每样一章就够）：
+  · 入门：环境与最小可用、核心概念与心智模型、最常见 API/配置、第一个能跑通的东西；
+  · 进阶：底层原理与机制、关键参数的取舍、边界条件与典型误区、性能特征；
+  · 实战：候选人简历项目的落地改造、线上故障与排障路径、容量与压测、协作与规范；
+  · 精通：源码/内核级机制、选型对比与答辩、压力面连环追问、架构演进与踩坑复盘。
+- **必须尽量复用下面给出的考点**：topicIds 只能填清单里真实存在的 id，可多选；清单里的每个考点都应至少出现在一章的 topicIds 里（确实超出本课范围才可遗漏）。
+- 章节之间不要注水：不许把同一主题硬拆成「XX（一）」「XX（二）」凑数；每章必须是一个能被独立追问的面试话题面。
 - keyQuestions 必须是面试官真会问的，不要写"什么是 XX"这种教科书题。
 - checkpoints 要能用一句话自检，例如"能不看资料讲清 A 与 B 的取舍，并各举一个项目例子"。
 - totalHours 与各章 hours 大致对得上。
