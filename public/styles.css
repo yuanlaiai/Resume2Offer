@@ -933,6 +933,7 @@ h1.hero-title em {
 .cn-title { font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .04em; padding: 2px 4px 6px; }
 .cn-title span { color: var(--brand-deep); }
 .cn-sub { font-size: 11px; color: var(--muted); padding: 10px 4px 2px; }
+.cn-all { width: 100%; margin-top: 8px; justify-content: center; }
 .course-tab {
   display: block; width: 100%; text-align: left; padding: 10px 11px; border-radius: 11px; cursor: pointer;
   border: 1px solid transparent; background: transparent; color: var(--text);

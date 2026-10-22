@@ -22,7 +22,16 @@ import {
   courseDepthSpec,
   DEPTHS,
 } from './prompts.js';
-import { normalizeStack, missingStacks, coverageOf, fallbackGroup, hasKey, keysOf } from './coverage.js';
+import {
+  normalizeStack,
+  missingStacks,
+  coverageOf,
+  fallbackGroup,
+  hasKey,
+  keysOf,
+  attachUncoveredTopics,
+  topicCoverage,
+} from './coverage.js';
 
 const clamp = (n, min, max, dflt) => {
   const v = Number(n);
@@ -664,7 +673,16 @@ export async function runCourses(ctx, { analysisId, names, auto = false }) {
         console.warn(`[courses] ${group.name} 大纲过长，降级为精简版重试：`, err.message);
         raw = await chatJSON(ask(true), { temperature: 0.3, maxTokens: 9000 });
       }
-      results[i] = normalizeCourse(raw, { group, existing: existing.get(group.name) });
+      const course = normalizeCourse(raw, { group, existing: existing.get(group.name) });
+      // 章数再多，考点没落到章里也等于没讲：这里做一次硬性补齐
+      const fix = attachUncoveredTopics(course, group);
+      course.topicCoverage = topicCoverage(course, group);
+      if (fix.attached.length || fix.created.length) {
+        console.log(
+          `[courses] ${group.name} 补齐考点：挂靠 ${fix.attached.length} 个、新增 ${fix.created.length} 章`,
+        );
+      }
+      results[i] = course;
     } catch (err) {
       console.error(`[courses] ${group.name} 排课失败：`, err.message);
       failed.push({ group: group.name, error: err.message });

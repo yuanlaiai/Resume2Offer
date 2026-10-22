@@ -139,6 +139,121 @@ export function coverageOf(stack, groups) {
   });
 }
 
+/* ---------------- 考点 → 章节覆盖（课程不看章数够不够，看考点有没有落到章） ---------------- */
+
+const STOP = new Set([
+  '一个', '以及', '怎么', '如何', '什么', '为什么', '哪些', '多少', '这个', '那个',
+  '进行', '实现', '使用', '基于', '相关', '问题', '场景', '方案', '体系', '能力',
+]);
+
+/** 把标题拆成可比较的词元：英文词 + 中文二元组 */
+export function tokensOf(text) {
+  const s = String(text ?? '').toLowerCase();
+  const out = new Set();
+  for (const w of s.match(/[a-z][a-z0-9+#._-]{1,}/g) || []) out.add(w);
+  const cjk = s.replace(/[^\u4e00-\u9fa5]/g, '');
+  for (let i = 0; i < cjk.length - 1; i += 1) {
+    const bg = cjk.slice(i, i + 2);
+    if (!STOP.has(bg)) out.add(bg);
+  }
+  return out;
+}
+
+function scoreChapter(chapter, topic, exclude) {
+  const a = tokensOf(`${chapter?.title || ''} ${chapter?.goal || ''}`);
+  const b = tokensOf(`${topic?.title || ''} ${topic?.reason || ''}`);
+  let score = 0;
+  for (const t of b) {
+    // 组名本身（Kafka / RAG）每章都有，不算相似度信号，否则什么考点都会挂到第一章
+    if (exclude.has(t) || !a.has(t)) continue;
+    score += /^[a-z]/.test(t) ? 3 : 1;
+  }
+  return score;
+}
+
+/** 一门课的考点覆盖情况 */
+export function topicCoverage(course, group) {
+  const topics = Array.isArray(group?.topics) ? group.topics : [];
+  const used = new Set();
+  for (const s of course?.stages || []) {
+    for (const c of s.chapters || []) for (const id of c.topicIds || []) used.add(id);
+  }
+  const covered = topics.filter((t) => used.has(t.id));
+  const missing = topics.filter((t) => !used.has(t.id));
+  return {
+    total: topics.length,
+    covered: covered.length,
+    missing: missing.map((t) => t.title),
+    entries: missing.map((t) => ({ id: t.id, title: t.title })),
+  };
+}
+
+/**
+ * 把没被任何章节引用的考点补进课程：
+ * 先按关键词相似度挂到最相关的一章，实在没有对应章节就新增一章（放到匹配的阶段）。
+ * 返回 { attached: [...], created: [...] }，纯函数式地改动传入的 course。
+ */
+export function attachUncoveredTopics(course, group) {
+  const attached = [];
+  const created = [];
+  const topics = Array.isArray(group?.topics) ? group.topics : [];
+  if (!topics.length || !course?.stages?.length) return { attached, created };
+
+  const chapters = course.stages.flatMap((s) => s.chapters || []);
+  const used = new Set(chapters.flatMap((c) => c.topicIds || []));
+  const missing = topics.filter((t) => !used.has(t.id));
+  if (!missing.length) return { attached, created };
+
+  const stageByLevel = (level) => {
+    const idx = level === '基础' ? 0 : level === '深度' ? course.stages.length - 1 : Math.min(1, course.stages.length - 1);
+    return course.stages[idx] || course.stages[course.stages.length - 1];
+  };
+
+  const exclude = tokensOf(group?.name || '');
+  let chNo = chapters.length;
+  for (const topic of missing) {
+    let best = null;
+    let bestScore = 0;
+    for (const ch of chapters) {
+      const sc = scoreChapter(ch, topic, exclude);
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = ch;
+      }
+    }
+
+    // 有明确相关章节：直接挂上去，不为了好看硬造新章
+    if (best && bestScore >= 2) {
+      best.topicIds = [...new Set([...(best.topicIds || []), topic.id])];
+      attached.push({ id: topic.id, title: topic.title, chapter: best.title });
+      continue;
+    }
+
+    // 没有对应章节：补一章，保证这个考点在课程里真的讲得到
+    const stage = stageByLevel(topic.level);
+    chNo += 1;
+    const chapter = {
+      id: `ch${chNo}`,
+      title: topic.title,
+      goal: `吃透「${topic.title}」，并能接住面试追问`,
+      why: String(topic.reason || '').slice(0, 120),
+      level: ['基础', '进阶', '深度'].includes(topic.level) ? topic.level : '进阶',
+      hours: 2,
+      prereq: [],
+      keyQuestions: (topic.followups || []).slice(0, 3),
+      checkpoints: [`能脱稿讲清「${topic.title}」的机制、边界，并举一个项目例子`],
+      topicIds: [topic.id],
+      lesson: null,
+      added: true,
+    };
+    stage.chapters = [...(stage.chapters || []), chapter];
+    chapters.push(chapter);
+    created.push({ id: topic.id, title: topic.title, stage: stage.name });
+  }
+
+  return { attached, created };
+}
+
 /**
  * 兜底分组：模型补生成失败时也要保证页面上有这一类，
  * 内容虽通用，但至少给出可继续深挖的三个方向。

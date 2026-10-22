@@ -1090,7 +1090,8 @@ function courseOverview(course, courses) {
         ${pending.map((g) => `<button class="course-tab pending" data-gen-course="${esc(g.name)}">
           <span class="ct-name">${esc(g.name)}</span>
           <span class="ct-meta">${(g.topics || []).length} 个考点 · 点击排课</span>
-        </button>`).join('')}` : ''}
+        </button>`).join('')}
+        <button class="btn btn-ghost btn-sm cn-all" data-action="courses-all">全部排课（${pending.length} 类）</button>` : ''}
     </aside>
 
     <div class="course-main">
@@ -1101,6 +1102,7 @@ function courseOverview(course, courses) {
         <div class="course-chips">
           ${course.totalHours ? `<span class="chip">约 ${course.totalHours} 小时</span>` : ''}
           <span class="chip">面试权重 ${stars(course.interviewWeight || 3)}</span>
+          ${course.topicCoverage ? `<span class="chip ${course.topicCoverage.covered >= course.topicCoverage.total ? 'brand' : 'gap'}" title="${esc((course.topicCoverage.missing || []).join('、'))}">考点覆盖 ${course.topicCoverage.covered}/${course.topicCoverage.total}</span>` : ''}
           <span class="chip brand">${stats.done}/${stats.total} 章有讲义</span>
           ${course.fallback ? '<span class="chip gap">按考点自动兜底排课</span>' : ''}
         </div>

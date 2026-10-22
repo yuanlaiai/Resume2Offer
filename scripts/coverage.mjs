@@ -2,7 +2,16 @@
  * 技能覆盖回归测试。
  * 目标：简历里的技术大类不能被"挑重点"挑掉，也不能被相似词误判成已覆盖。
  */
-import { hasKey, groupCovers, normalizeStack, missingStacks, coverageOf, fallbackGroup } from '../server/coverage.js';
+import {
+  hasKey,
+  groupCovers,
+  normalizeStack,
+  missingStacks,
+  coverageOf,
+  fallbackGroup,
+  attachUncoveredTopics,
+  topicCoverage,
+} from '../server/coverage.js';
 
 const checks = [];
 const ok = (label, cond, extra = '') => checks.push({ label, cond: Boolean(cond), extra });
@@ -58,6 +67,38 @@ ok(
     cov.find((c) => c.name === 'Redis')?.covered === true &&
     cov.find((c) => c.name === 'Python')?.required === false,
 );
+
+/* ---- 课程对考点的硬覆盖 ---- */
+const g = {
+  name: 'RAG',
+  topics: [
+    { id: 't1', title: 'RAG 链路与召回率', level: '基础', followups: ['召回率怎么测？'] },
+    { id: 't2', title: '向量库索引选型', level: '进阶', followups: ['HNSW 和 IVF 怎么选？'] },
+    { id: 't3', title: '重排序 rerank 的收益', level: '深度', followups: ['rerank 什么时候没用？'] },
+  ],
+};
+const course = {
+  stages: [
+    { name: '入门', chapters: [{ id: 'ch1', title: 'RAG 链路怎么跑通', goal: '讲清召回与生成', topicIds: ['t1'] }] },
+    { name: '进阶', chapters: [{ id: 'ch2', title: '向量库索引', goal: '选型与调参', topicIds: [] }] },
+    { name: '精通', chapters: [{ id: 'ch3', title: '重排序与效果优化', goal: 'rerank 收益评估', topicIds: [] }] },
+  ],
+};
+const before = topicCoverage(course, g);
+ok('补齐前能查出未覆盖考点', before.covered === 1 && before.missing.length === 2, `${before.covered}/${before.total}`);
+const fix = attachUncoveredTopics(course, g);
+const after = topicCoverage(course, g);
+ok('补齐后考点 100% 落到章', after.covered === after.total, `${after.covered}/${after.total}，挂靠 ${fix.attached.length} 新增 ${fix.created.length}`);
+ok('相关章节优先挂靠而不是硬造新章', fix.created.length === 0 && fix.attached.length === 2, `新增 ${fix.created.length} 章`);
+
+const lonely = {
+  name: 'Kafka',
+  topics: [{ id: 'k1', title: 'Kafka 事务消息与幂等', level: '深度', followups: ['怎么保证不重复消费？'] }],
+};
+const c2 = { stages: [{ name: '入门', chapters: [{ id: 'ch1', title: 'Kafka 是什么', topicIds: [] }] }] };
+const fix2 = attachUncoveredTopics(c2, lonely);
+ok('无处可挂时补一章并带上追问', fix2.created.length === 1 && c2.stages.some((s) => s.chapters.some((c) => c.topicIds.includes('k1') && c.keyQuestions.length)));
+ok('补的章节不会重复挂同一个考点', attachUncoveredTopics(c2, lonely).created.length === 0);
 
 let failed = 0;
 for (const c of checks) {
