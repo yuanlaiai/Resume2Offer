@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "description": "简历驱动的 AI 面试复习教练：解析简历 → 知识点图谱 → 定制复习资料 → 出题测验 → 打分复盘 → 下一步推荐",
+  "description": "答案不在题库里，在你的简历里。简历驱动的 AI 面试复习教练：解析简历 → 知识点图谱 → 系统课程 → 定制复习资料 → 出题测验 → 打分复盘 → 下一步推荐",
   "keywords": [
     "interview",
     "resume",
