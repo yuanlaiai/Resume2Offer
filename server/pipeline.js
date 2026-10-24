@@ -593,11 +593,20 @@ function normalizeCourse(raw, { group, existing }) {
       if (c.lesson) oldLessons.set(normGroupName(c.title), c.lesson);
     }
   }
+  const matched = new Set();
   for (const s of stages) {
     for (const c of s.chapters) {
       const old = oldLessons.get(normGroupName(c.title));
-      if (old) c.lesson = old;
+      if (old) {
+        c.lesson = old;
+        matched.add(normGroupName(c.title));
+      }
     }
+  }
+  // 大纲重排后标题对不上的旧讲义不直接丢，先归档，之后可以在数据文件里找回
+  const orphanLessons = [];
+  for (const [key, lesson] of oldLessons) {
+    if (!matched.has(key)) orphanLessons.push({ title: lesson.title || key, lesson, archivedAt: new Date().toISOString() });
   }
 
   const hours = stages.reduce((sum, s) => sum + s.chapters.reduce((x, c) => x + c.hours, 0), 0);
@@ -611,6 +620,7 @@ function normalizeCourse(raw, { group, existing }) {
     totalHours: clamp(raw?.totalHours, 1, 120, Math.round(hours) || 10),
     interviewWeight: clamp(raw?.interviewWeight, 1, 5, maxPriority(group) || 3),
     stages,
+    orphanLessons: orphanLessons.length ? orphanLessons.slice(0, 40) : existing?.orphanLessons || [],
     version: (existing?.version || 0) + 1,
     createdAt: new Date().toISOString(),
   };
