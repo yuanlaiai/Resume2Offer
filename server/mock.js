@@ -1192,6 +1192,28 @@ export function mockChat(messages) {
 
   if (system.includes('面试准备报告')) return reply(REPORT);
 
+  if (system.includes('高分参考答案')) {
+    // 从对话里抽出面试官的每道题，编演示版参考答案
+    const qs = [];
+    for (const m of user.split(/\n\n+/)) {
+      if (m.startsWith('面试官：') && !qs.length) qs.push(m.replace(/^面试官：/, '').trim());
+    }
+    const question = qs[0] || '介绍一下这个项目的整体架构和你的分工';
+    return reply({
+      answers: [
+        {
+          no: 1,
+          question: question.slice(0, 60),
+          intent: '开场题：确认项目是真的、架构在你脑子里有全局图，顺便看表达是否结构化。',
+          verdict: '演示数据：答出了主链路和分工，数字缺少归因，会被继续深挖。',
+          reference:
+            '【30 秒框架】\n先一句话定位项目（给谁用、解决什么问题），再按「接入层 → 检索链路 → 生成层 → 评估闭环」四层讲主链路，最后落到你负责的部分和一个最有说服力的指标。\n\n【完整展开】\n- 定位：面向门店一线人员的知识问答系统，解决"制度文档查不到、问人要等半天"的问题。\n- 链路：文档接入（解析/清洗/切片）→ 向量化入库 → 混合检索（向量 + 关键词）→ rerank → LLM 生成 → badcase 回流。\n- 边界与取舍：切片大小要按文档类型分策略（制度类长、FAQ 类短）；纯向量检索在术语多的场景召回不稳，必须混关键词。\n- 例子：结合简历项目说清你负责哪段、改造前后指标对比。\n【避坑】别一上来就报技术栈清单；先讲问题再讲方案，面试官才有抓手。',
+          followups: ['切片大小和重叠率怎么定的？ → 说清分策略的依据和实验对比，别背固定数字。', 'badcase 怎么回流？ → 给出从线上日志到评测集的闭环路径。'],
+        },
+      ],
+    });
+  }
+
   if (system.includes('出一套测验题')) return reply(QUIZ);
 
   if (system.includes('批改候选人')) {

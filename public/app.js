@@ -2810,7 +2810,9 @@ async function generatePlan() {
 
 /* ---------------- 模拟面试 ---------------- */
 
-function mockReportView(report) {
+function mockReportView(session) {
+  const report = session.report || {};
+  const answers = session.answers || [];
   const score = Math.max(0, Math.min(100, Number(report.overall) || 0));
   return `
     <div class="mock-report">
@@ -2831,6 +2833,18 @@ function mockReportView(report) {
       ${(report.highlights || []).length ? `<div class="jd-sec"><b>加分回答</b><ul class="list-clean">${report.highlights.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
       ${(report.misses || []).length ? `<div class="jd-sec"><b>没接住的追问</b><ul class="list-clean">${report.misses.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
       ${(report.practice || []).length ? `<div class="jd-sec"><b>接下来 7 天练什么</b><ul class="list-clean">${report.practice.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+      ${answers.length ? `<div class="jd-sec"><b>逐题参考答案（${answers.length} 题）</b>
+        ${answers.map((a) => `<div class="mq-card">
+          <div class="mq-head">
+            <span class="mq-no">${a.no}</span>
+            <div class="mq-q">${esc(a.question)}</div>
+          </div>
+          ${a.intent ? `<div class="fq"><b>为什么问这题：</b>${esc(a.intent)}</div>` : ''}
+          ${a.verdict ? `<div class="mq-verdict">${esc(a.verdict)}</div>` : ''}
+          <div class="mq-ref">${esc(a.reference).replace(/\n/g, '<br />')}</div>
+          ${(a.followups || []).length ? `<div class="mq-fu">${a.followups.map((f) => `<div>↳ ${esc(f)}</div>`).join('')}</div>` : ''}
+        </div>`).join('')}
+      </div>` : ''}
     </div>
   `;
 }
@@ -2887,7 +2901,7 @@ function panelMock() {
         <button class="btn btn-ghost btn-sm" id="mock-finish">结束并出报告</button>
         <button class="btn btn-brand btn-sm" id="mock-send" ${active.done ? 'disabled' : ''}>发送回答</button>
       </div>
-    </div>` : active.report ? mockReportView(active.report) : '<p class="mock-hint">这场面试没有生成报告。</p>'}
+    </div>` : active.report ? mockReportView(active) : '<p class="mock-hint">这场面试没有生成报告。</p>'}
   </div>`;
 }
 
@@ -3031,7 +3045,7 @@ function bindMock() {
           body: JSON.stringify({ sessionId: session.id }),
         }),
         '面试官写评审笔记',
-        ['回顾完整对话', '逐维度评分', '给出 7 天练习建议'],
+        ['回顾完整对话', '逐维度评分', '逐题写参考答案'],
       )
         .then(async () => {
           const record = await api(`/api/analyses/${state.record.id}`);

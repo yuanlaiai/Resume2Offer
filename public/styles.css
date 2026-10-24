@@ -1534,3 +1534,30 @@ h1.hero-title em {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
 }
+
+/* ---------- 逐题参考答案 ---------- */
+.mq-card {
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  padding: 13px 15px;
+  margin: 10px 0;
+  background: #fff;
+}
+.mq-head { display: flex; gap: 10px; align-items: baseline; }
+.mq-no {
+  flex: none; width: 22px; height: 22px; border-radius: 7px;
+  background: var(--brand-soft); color: var(--brand-deep); border: 1px solid var(--brand-line);
+  font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center;
+}
+.mq-q { font-weight: 600; font-size: 13.5px; line-height: 1.55; }
+.mq-verdict {
+  margin-top: 8px; font-size: 12.5px; color: var(--text-2);
+  background: var(--surface-2); border-left: 3px solid var(--brand);
+  padding: 6px 10px; border-radius: 0 8px 8px 0;
+}
+.mq-ref {
+  margin-top: 10px; font-size: 13px; line-height: 1.8; color: var(--text);
+  padding-top: 10px; border-top: 1px dashed var(--line);
+}
+.mq-fu { margin-top: 10px; font-size: 12.5px; color: var(--text-2); line-height: 1.7; }
+.mq-fu > div { padding: 3px 0; }

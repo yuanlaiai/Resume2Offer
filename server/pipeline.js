@@ -21,6 +21,7 @@ import {
   buildMockStartPrompt,
   buildMockTurnPrompt,
   buildMockReportPrompt,
+  buildMockAnswersPrompt,
   buildJdPrompt,
   buildResumeReviewPrompt,
   depthSpec,
@@ -1547,7 +1548,38 @@ export async function runMockFinish(ctx, { analysisId, sessionId }) {
 
   const mocks = [session, ...(record.mocks || []).filter((m) => m.id !== session.id)];
   await store.update(record.id, { mocks });
-  ctx.tick(1, '评审报告已生成');
+
+  // 逐题参考答案：单独一次调用，输出量大，和评分报告分开生成
+  ctx.step(0.7, '逐题写高分参考答案');
+  try {
+    const ans = await chatJSON(
+      buildMockAnswersPrompt({
+        targetRole: record.targetRole,
+        level: record.level,
+        transcript: session.transcript,
+      }),
+      { temperature: 0.4, maxTokens: 8000 },
+    );
+    session.answers = arr(ans.answers)
+      .slice(0, 14)
+      .map((a, i) => ({
+        no: Number(a.no) || i + 1,
+        question: strOr(a.question),
+        intent: strOr(a.intent),
+        verdict: strOr(a.verdict),
+        reference: strOr(a.reference),
+        followups: arr(a.followups).map(str).filter(Boolean).slice(0, 4),
+      }))
+      .filter((a) => a.question || a.reference);
+  } catch (err) {
+    // 参考答案生成失败不拖垮评分报告
+    console.error('[mock] 参考答案生成失败：', err.message);
+    session.answers = [];
+  }
+
+  const mocks2 = [session, ...(record.mocks || []).filter((m) => m.id !== session.id)];
+  await store.update(record.id, { mocks: mocks2 });
+  ctx.tick(1, '评审报告与参考答案已生成');
   return session;
 }
 
