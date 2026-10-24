@@ -120,7 +120,23 @@ function toast(msg, type = '') {
 }
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, opts);
+  const token = localStorage.getItem('r2o-token') || '';
+  const headers = { ...(opts.headers || {}) };
+  if (token) headers['x-token'] = token;
+
+  let res = await fetch(path, { ...opts, headers });
+  if (res.status === 401) {
+    const body = await res.clone().json().catch(() => ({}));
+    if (body.authRequired) {
+      const input = window.prompt('这台服务开启了访问鉴权，请输入 ACCESS_TOKEN：');
+      if (input && input.trim()) {
+        localStorage.setItem('r2o-token', input.trim());
+        headers['x-token'] = input.trim();
+        res = await fetch(path, { ...opts, headers });
+      }
+    }
+  }
+
   const ct = res.headers.get('content-type') || '';
   const data = ct.includes('application/json') ? await res.json() : await res.text();
   if (!res.ok) throw new Error((data && data.error) || `请求失败（${res.status}）`);
@@ -223,8 +239,11 @@ function renderTopbar() {
     : h.ready
       ? `<span class="pill ghost" title="${esc(h.llm.baseUrl)}">${esc(h.llm.model)}</span>`
       : `<span class="pill" style="background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn)">未配置模型</span>`;
+  const usage = state.usage && state.usage.totalTokens
+    ? `<span class="pill ghost" title="本服务累计 LLM 用量（${state.usage.totalCalls} 次调用）">↯ ${(state.usage.totalTokens / 1000).toFixed(1)}k tok</span>`
+    : '';
   const newBtn = state.record ? `<a class="btn btn-ghost btn-sm" href="#/">新建分析</a>` : '';
-  $topRight.innerHTML = `${modelPill}${newBtn}`;
+  $topRight.innerHTML = `${modelPill}${usage}${newBtn}`;
 }
 
 /* ---------------- 首页 ---------------- */
@@ -737,6 +756,7 @@ const TABS = [
   { key: 'materials', label: '复习资料' },
   { key: 'report', label: '面试报告' },
   { key: 'quiz', label: '测验' },
+  { key: 'mock', label: '模拟面试' },
   { key: 'review', label: '复盘' },
   { key: 'plan', label: '计划' },
 ];
@@ -851,6 +871,7 @@ function tabCount(key) {
   if (key === 'report') return r.report ? 1 : 0;
   if (key === 'quiz') return (r.quizzes || []).length;
   if (key === 'review') return (r.attempts || []).length;
+  if (key === 'mock') return (r.mocks || []).length;
   return 0;
 }
 
@@ -865,6 +886,7 @@ function renderPanel() {
     materials: panelMaterials,
     report: panelReport,
     quiz: panelQuiz,
+    mock: panelMock,
     review: panelReview,
     plan: panelPlan,
   }[state.tab];
@@ -879,6 +901,7 @@ function renderPanel() {
   if (state.tab === 'materials') bindMaterials();
   if (state.tab === 'report') bindReport();
   if (state.tab === 'quiz') bindQuiz();
+  if (state.tab === 'mock') bindMock();
   if (state.tab === 'review') bindReview();
   if (state.tab === 'plan') bindPlan();
 }
@@ -995,10 +1018,124 @@ function panelProfile() {
         </div>`).join('') || '<div style="font-size:13px;color:var(--muted)">暂无</div>'}
       </div>
     </div>
+
+    <div class="grid-2" style="margin-top:14px">
+      <div class="card">
+        <div class="card-title">JD 对比<span class="line"></span>
+          ${r.jd ? `<button class="btn btn-quiet btn-sm" id="jd-rerun">重新对比</button>` : ''}
+        </div>
+        ${r.jd ? jdView(r.jd) : `
+          <p class="jd-hint">把目标职位的 JD 原文贴进来，AI 逐条对照简历：哪些要求扛得住、哪些是缺口、面试前 7 天优先补什么。</p>
+          <textarea id="jd-text" rows="6" placeholder="粘贴 JD 原文（岗位职责 + 任职要求）…"></textarea>
+          <div style="text-align:right;margin-top:10px"><button class="btn btn-brand btn-sm" id="jd-run">开始对比</button></div>`}
+      </div>
+      <div class="card">
+        <div class="card-title">简历评审<span class="line"></span>
+          ${r.resumeReview ? `<button class="btn btn-quiet btn-sm" id="review-rerun">重新评审</button>` : ''}
+        </div>
+        ${r.resumeReview ? reviewView(r.resumeReview) : `
+          <p class="jd-hint">面试官视角逐行审你的简历：哪些表述一定会被追问、写法有什么硬伤、怎么改写成接得住追问的句子。</p>
+          <div style="text-align:right;margin-top:10px"><button class="btn btn-brand btn-sm" id="review-run">开始评审</button></div>`}
+      </div>
+    </div>
+  `;
+}
+
+/* ---- JD 对比 / 简历评审渲染 ---- */
+
+function jdView(jd) {
+  return `
+    <div class="jd-head">
+      <div class="ring" style="--p:${jd.fitScore || 0};width:52px;height:52px"><span style="font-size:14px">${jd.fitScore || 0}</span></div>
+      <p>${esc(jd.headline || '')}</p>
+    </div>
+    ${(jd.matches || []).length ? `<div class="jd-sec"><b>扛得住的（${jd.matches.length}）</b>
+      ${jd.matches.map((m) => `<div class="jd-row ok"><span class="jd-tag">${esc(m.strength || '够用')}</span><div><div class="jd-jd">${esc(m.jd)}</div><div class="jd-ev">${esc(m.evidence)}</div></div></div>`).join('')}
+    </div>` : ''}
+    ${(jd.gaps || []).length ? `<div class="jd-sec"><b>缺口（${jd.gaps.length}）</b>
+      ${jd.gaps.map((m) => `<div class="jd-row miss"><span class="jd-tag">${esc(m.severity || '中')}</span><div><div class="jd-jd">${esc(m.jd)}</div><div class="jd-ev">${esc(m.why)}</div></div></div>`).join('')}
+    </div>` : ''}
+    ${(jd.actions || []).length ? `<div class="jd-sec"><b>面试前优先做</b><ul class="list-clean">${jd.actions.map((a) => `<li>${esc(a)}</li>`).join('')}</ul></div>` : ''}
+    ${(jd.talking || []).length ? `<div class="jd-sec"><b>把缺口说成故事</b><ul class="list-clean">${jd.talking.map((a) => `<li>${esc(a)}</li>`).join('')}</ul></div>` : ''}
+  `;
+}
+
+function reviewView(rv) {
+  return `
+    <p class="jd-headline">${esc(rv.headline || '')}</p>
+    ${(rv.grill || []).length ? `<div class="jd-sec"><b>一定会被追问（${rv.grill.length}）</b>
+      ${rv.grill.map((g) => `<div class="rv-row">
+        <div class="rv-quote">“${esc(g.quote)}”</div>
+        <div class="fq"><b>追问：</b>${esc(g.question)}</div>
+        ${g.risk ? `<div class="fq gap-text"><b>接不住的后果：</b>${esc(g.risk)}</div>` : ''}
+        ${g.prepare ? `<div class="fq ok-text"><b>准备：</b>${esc(g.prepare)}</div>` : ''}
+      </div>`).join('')}
+    </div>` : ''}
+    ${(rv.rewrite || []).length ? `<div class="jd-sec"><b>改写建议（${rv.rewrite.length}）</b>
+      ${rv.rewrite.map((r) => `<div class="rv-row">
+        <div class="rv-quote">“${esc(r.before)}”</div>
+        <div class="rv-after">改为：${esc(r.after)}</div>
+        ${r.why ? `<div class="fq">${esc(r.why)}</div>` : ''}
+      </div>`).join('')}
+    </div>` : ''}
+    ${(rv.cut || []).length ? `<div class="jd-sec"><b>建议删掉或弱化</b><ul class="list-clean">${rv.cut.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
   `;
 }
 
 function bindProfile() {
+  const runJd = (id) => {
+    const jdText = document.getElementById('jd-text')?.value || '';
+    if (jdText.trim().length < 30) return toast('JD 内容太短，请粘贴完整职位描述', 'err');
+    runJob(
+      api(`/api/analyses/${state.record.id}/jd`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jdText }),
+      }),
+      'JD 对比',
+      ['读取 JD 要求', '逐条对照简历', '输出补齐动作'],
+    )
+      .then(async () => {
+        await refreshRecord();
+        renderPanel();
+      })
+      .catch(() => {});
+  };
+  const jdRun = document.getElementById('jd-run');
+  if (jdRun) jdRun.addEventListener('click', runJd);
+  const jdRerun = document.getElementById('jd-rerun');
+  if (jdRerun) jdRerun.addEventListener('click', () => {
+    const prev = state.record.jd?.jdText || '';
+    state.record.jd = null;
+    renderPanel();
+    setTimeout(() => {
+      const box = document.getElementById('jd-text');
+      if (box) box.value = prev;
+    }, 0);
+  });
+
+  const reviewRun = document.getElementById('review-run');
+  if (reviewRun) {
+    reviewRun.addEventListener('click', () => {
+      runJob(
+        api(`/api/analyses/${state.record.id}/resume-review`, { method: 'POST', headers: { 'Content-Type': 'application/json' } }),
+        '简历评审',
+        ['逐行模拟追问', '生成改写建议'],
+      )
+        .then(async () => {
+          await refreshRecord();
+          renderPanel();
+        })
+        .catch(() => {});
+    });
+  }
+  const reviewRerun = document.getElementById('review-rerun');
+  if (reviewRerun) reviewRerun.addEventListener('click', () => {
+    state.record.resumeReview = null;
+    renderPanel();
+    setTimeout(() => document.getElementById('review-run')?.click(), 0);
+  });
+
   on('[data-cov]', 'click', (e) => {
     const btn = e.currentTarget;
     const group = btn.dataset.covGroup;
@@ -1027,7 +1164,13 @@ function allChapters(course) {
 
 function courseStats(course) {
   const list = allChapters(course).map((x) => x.chapter);
-  return { total: list.length, done: list.filter((c) => c.lesson).length };
+  const prog = state.record?.progress || {};
+  return {
+    total: list.length,
+    done: list.filter((c) => c.lesson).length,
+    learned: list.filter((c) => prog[c.id] === 'learned').length,
+    mastered: list.filter((c) => prog[c.id] === 'mastered').length,
+  };
 }
 
 function currentCourse() {
@@ -1104,6 +1247,7 @@ function courseOverview(course, courses) {
           <span class="chip">面试权重 ${stars(course.interviewWeight || 3)}</span>
           ${course.topicCoverage ? `<span class="chip ${course.topicCoverage.covered >= course.topicCoverage.total ? 'brand' : 'gap'}" title="${esc((course.topicCoverage.missing || []).join('、'))}">考点覆盖 ${course.topicCoverage.covered}/${course.topicCoverage.total}</span>` : ''}
           <span class="chip brand">${stats.done}/${stats.total} 章有讲义</span>
+          ${stats.mastered + stats.learned ? `<span class="chip" title="点章节行末的状态按钮切换">已掌握 ${stats.mastered} · 已学 ${stats.learned}</span>` : ''}
           ${course.fallback ? '<span class="chip gap">按考点自动兜底排课</span>' : ''}
         </div>
         ${course.outcome ? `<div class="course-outcome">学完能达到：${esc(course.outcome)}</div>` : ''}
@@ -1150,7 +1294,9 @@ function courseOverview(course, courses) {
 
 function chapterRow(course, stage, ch, no) {
   const done = Boolean(ch.lesson);
-  return `<div class="chapter-row ${done ? 'done' : ''}">
+  const st = (state.record?.progress || {})[ch.id] || 'none';
+  const stMeta = { none: ['未学', ''], learned: ['已学', 'brand'], mastered: ['已掌握', 'brand'] }[st];
+  return `<div class="chapter-row ${done ? 'done' : ''} ${st !== 'none' ? 'learned' : ''}">
     <div class="ch-no">${String(no).padStart(2, '0')}</div>
     <div class="ch-main">
       <div class="ch-title">${esc(ch.title)}
@@ -1169,6 +1315,7 @@ function chapterRow(course, stage, ch, no) {
       </details>` : ''}
     </div>
     <div class="ch-actions">
+      <button class="btn btn-quiet btn-sm ch-prog" data-progress="${esc(ch.id)}" title="点击切换：未学 → 已学 → 已掌握"><b>${stMeta[0]}</b></button>
       ${done
         ? `<button class="btn btn-quiet btn-sm" data-open-chapter="${esc(ch.id)}">阅读讲义</button>
            <button class="btn btn-quiet btn-sm" data-gen-lesson="${esc(ch.id)}">重写</button>`
@@ -1339,6 +1486,25 @@ function bindCourses() {
 
   const remaining = document.getElementById('gen-remaining');
   if (remaining) remaining.addEventListener('click', () => generateLessons());
+
+  // 章节学习进度：未学 → 已学 → 已掌握 → 未学
+  on('[data-progress]', 'click', async (e) => {
+    const chapterId = e.currentTarget.dataset.progress;
+    const prog = state.record?.progress || {};
+    const cur = prog[chapterId] || 'none';
+    const next = cur === 'none' ? 'learned' : cur === 'learned' ? 'mastered' : 'none';
+    try {
+      const { progress } = await api(`/api/analyses/${state.record.id}/progress`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chapterId, status: next }),
+      });
+      state.record.progress = progress;
+      renderPanel();
+    } catch (err) {
+      toast(err.message, 'err');
+    }
+  });
 
   const regen = document.getElementById('regen-course');
   if (regen) {
@@ -2642,6 +2808,186 @@ async function generatePlan() {
   }
 }
 
+/* ---------------- 模拟面试 ---------------- */
+
+function mockReportView(report) {
+  const score = Math.max(0, Math.min(100, Number(report.overall) || 0));
+  return `
+    <div class="mock-report">
+      <div class="mr-head">
+        <div class="ring" style="--p:${score};width:64px;height:64px"><span style="font-size:17px">${score}</span></div>
+        <div>
+          <div class="mr-verdict">${esc(report.verdict || '')}</div>
+          <div class="mr-sub">面试官视角评分，宁低勿高——低分是提醒，不是否定</div>
+        </div>
+      </div>
+      ${(report.dimensions || []).length ? `<div class="jd-sec"><b>分维度</b>
+        ${report.dimensions.map((d) => `<div class="mr-dim">
+          <div class="mr-dim-head"><b>${esc(d.name)}</b><span>${d.score}</span></div>
+          <div class="course-progress" style="margin:4px 0 6px"><i style="width:${Math.max(0, Math.min(100, d.score))}%"></i></div>
+          <div class="fq">${esc(d.comment)}</div>
+        </div>`).join('')}
+      </div>` : ''}
+      ${(report.highlights || []).length ? `<div class="jd-sec"><b>加分回答</b><ul class="list-clean">${report.highlights.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+      ${(report.misses || []).length ? `<div class="jd-sec"><b>没接住的追问</b><ul class="list-clean">${report.misses.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+      ${(report.practice || []).length ? `<div class="jd-sec"><b>接下来 7 天练什么</b><ul class="list-clean">${report.practice.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+    </div>
+  `;
+}
+
+function panelMock() {
+  const r = state.record;
+  if (!(r.groups || []).length) {
+    return emptyState('先完成简历分析', '模拟面试要基于简历和考点提问，先上传简历完成一次分析', '返回', 'home');
+  }
+  const sessions = r.mocks || [];
+  const active = sessions.find((s) => s.id === state.mockId) || sessions[0] || null;
+  if (active && state.mockId !== active.id) state.mockId = active.id;
+
+  const sessionChips = sessions.length
+    ? `<div class="mock-sessions">
+        ${sessions.map((s, i) => `<button class="chip ${s.id === active?.id ? 'brand' : ''}" data-mock-open="${esc(s.id)}">
+          第 ${sessions.length - i} 场 · ${s.status === 'done' ? `已评分 ${s.report?.overall ?? '—'} 分` : s.status === 'live' ? '进行中' : '已结束'}
+        </button>`).join('')}
+      </div>`
+    : '';
+
+  if (!active) {
+    return `<div class="card course-empty">
+      <div class="card-title">模拟面试<span class="line"></span></div>
+      <p class="course-empty-desc">AI 面试官按你的简历和考点连续追问 8-10 题：项目深挖 → 原理机制 → 线上排障 → 系统设计。像真面试一样一次只问一个问题，答完出一份面试官视角的评分报告。<br /><b>建议口头回答再说要点</b>——练的就是开口，不是打字。</p>
+      <div class="course-empty-actions">
+        <button class="btn btn-brand" data-mock-start="standard">开始标准面试</button>
+        <button class="btn btn-ghost" data-mock-start="pressure">压力面模式</button>
+      </div>
+    </div>`;
+  }
+
+  const live = active.status === 'live';
+  return `<div class="card mock-card">
+    <div class="card-title">模拟面试<span class="line"></span>
+      <span class="chip ${active.mode === 'pressure' ? 'gap' : 'brand'}">${active.mode === 'pressure' ? '压力面' : '标准'}</span>
+      ${live ? `<span class="chip">第 ${active.questionNo} 问 · 进行中</span>` : `<span class="chip brand">已评分</span>`}
+      <button class="btn btn-quiet btn-sm" data-mock-start="standard" style="margin-left:auto">再练一场</button>
+    </div>
+    ${sessionChips}
+    <div class="mock-log" id="mock-log">
+      ${active.transcript.map((m) => `<div class="m-msg ${m.role === 'candidate' ? 'me' : 'itv'}">
+        <div class="m-who">${m.role === 'candidate' ? '你' : '面试官'}${m.probe ? `<span class="m-probe">追问点：${esc(m.probe)}</span>` : ''}</div>
+        <div class="m-text">${esc(m.content).replace(/\n/g, '<br />')}</div>
+      </div>`).join('')}
+    </div>
+    ${live ? `
+    <div class="mock-input">
+      <textarea id="mock-answer" rows="3" placeholder="回答面试官的问题…（口头答完再把要点打进来，效果最好）"></textarea>
+      <div class="mock-input-bar">
+        <span class="mock-hint">Ctrl / ⌘ + Enter 发送</span>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost btn-sm" id="mock-finish">结束并出报告</button>
+        <button class="btn btn-brand btn-sm" id="mock-send" ${active.done ? 'disabled' : ''}>发送回答</button>
+      </div>
+    </div>` : active.report ? mockReportView(active.report) : '<p class="mock-hint">这场面试没有生成报告。</p>'}
+  </div>`;
+}
+
+function bindMock() {
+  on('[data-mock-start]', 'click', async (e) => {
+    const mode = e.currentTarget.dataset.mockStart || 'standard';
+    try {
+      showOverlay(mode === 'pressure' ? '压力面面试官进场' : '面试官进场', ['组织考点', '设计开场问题']);
+      const { session } = await api(`/api/analyses/${state.record.id}/mock/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      });
+      hideOverlay();
+      state.record.mocks = [session, ...(state.record.mocks || []).filter((m) => m.id !== session.id)];
+      state.mockId = session.id;
+      renderPanel();
+      setTimeout(() => document.getElementById('mock-log')?.scrollTo({ top: 1e9, behavior: 'smooth' }), 50);
+    } catch (err) {
+      overlayError(err.message);
+    }
+  });
+
+  on('[data-mock-open]', 'click', (e) => {
+    state.mockId = e.currentTarget.dataset.mockOpen;
+    renderPanel();
+  });
+
+  const send = async () => {
+    const box = document.getElementById('mock-answer');
+    const session = (state.record.mocks || []).find((m) => m.id === state.mockId);
+    const answer = box?.value.trim();
+    if (!box || !answer) return;
+    if (!session || session.status !== 'live') return;
+    box.disabled = true;
+    document.getElementById('mock-send').disabled = true;
+    box.value = '';
+    // 先把候选人的回答乐观渲染出来
+    session.transcript.push({ role: 'candidate', content: answer, at: new Date().toISOString() });
+    renderPanel();
+    const log = document.getElementById('mock-log');
+    if (log) log.scrollTop = log.scrollHeight;
+    document.getElementById('mock-answer')?.focus();
+    try {
+      const { session: next } = await api(`/api/analyses/${state.record.id}/mock/turn`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: session.id, answer }),
+      });
+      state.record.mocks = [next, ...(state.record.mocks || []).filter((m) => m.id !== next.id)];
+      state.mockId = next.id;
+      renderPanel();
+      setTimeout(() => document.getElementById('mock-log')?.scrollTo({ top: 1e9, behavior: 'smooth' }), 50);
+    } catch (err) {
+      toast(err.message, 'err');
+      box.disabled = false;
+      const sendBtn = document.getElementById('mock-send');
+      if (sendBtn) sendBtn.disabled = false;
+    }
+  };
+
+  const sendBtn = document.getElementById('mock-send');
+  if (sendBtn) sendBtn.addEventListener('click', send);
+  const box = document.getElementById('mock-answer');
+  if (box) {
+    box.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        send();
+      }
+    });
+    box.focus();
+  }
+
+  const finish = document.getElementById('mock-finish');
+  if (finish) {
+    finish.addEventListener('click', () => {
+      const session = (state.record.mocks || []).find((m) => m.id === state.mockId);
+      if (!session) return;
+      const partial = session.transcript.filter((m) => m.role === 'candidate').length;
+      if (partial < 2 && !window.confirm(`目前只回答了 ${partial} 题，回答太少报告会不准。确定现在结束？`)) return;
+      runJob(
+        api(`/api/analyses/${state.record.id}/mock/finish`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: session.id }),
+        }),
+        '面试官写评审笔记',
+        ['回顾完整对话', '逐维度评分', '给出 7 天练习建议'],
+      )
+        .then(async () => {
+          const record = await api(`/api/analyses/${state.record.id}`);
+          state.record = record;
+          renderPanel();
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        })
+        .catch(() => {});
+    });
+  }
+}
+
 /* ---------------- 启动 ---------------- */
 
 async function boot() {
@@ -2653,6 +2999,11 @@ async function boot() {
     state.health = await api('/api/health');
   } catch (err) {
     toast('无法连接服务端', 'err');
+  }
+  try {
+    state.usage = await api('/api/usage');
+  } catch {
+    /* 用量展示失败不影响主流程 */
   }
   renderTopbar();
   route();

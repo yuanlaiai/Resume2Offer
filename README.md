@@ -4,6 +4,8 @@
 
 **答案不在题库里，在你的简历里。**
 
+[English](README.en.md) | 中文
+
 简历驱动的 AI 面试复习教练 · 上传简历 → 拆出你真正会被问到的知识点 → 每类技术一门从入门到精通的系统课 → 生成面试官视角的复习资料 → 出题测验 → 打分复盘 → 排出 7 天冲刺计划
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -255,6 +257,13 @@ resume2offer/
 | GET | `/api/analyses/:id/courses/:cid.md` | 导出整门课（大纲 + 已生成讲义） |
 | GET | `/api/analyses/:id/courses/:cid/chapters/:chid.md` | 导出单章讲义 |
 | POST | `/api/chat` | AI 随问：`{analysisId?, selection?, context?, messages}` 多轮对话，直接响应不进队列 |
+| POST | `/api/analyses/:id/mock/start` | 模拟面试开场：`{mode: standard\|pressure}`，面试官抛第一个问题 |
+| POST | `/api/analyses/:id/mock/turn` | 回答一题：`{sessionId, answer}`，面试官追问下一题，直接响应 |
+| POST | `/api/analyses/:id/mock/finish` | 收尾出评分报告（任务） |
+| POST | `/api/analyses/:id/jd` | JD 对比：`{jdText}`，逐条对照简历输出匹配 / 缺口 / 行动 |
+| POST | `/api/analyses/:id/resume-review` | 简历评审：面试官视角的追问预演 + 改写建议 |
+| POST | `/api/analyses/:id/progress` | 章节学习进度：`{chapterId, status: none\|learned\|mastered}` |
+| GET | `/api/usage` | 本服务累计 LLM token 用量 |
 
 速学中心的接口：
 
@@ -294,6 +303,17 @@ node scripts/e2e.mjs     # 端到端：预判→解析→覆盖校验→三档�
 CI 在 Node 20 / 22 上执行：语法检查 → 四组离线自测 → 启动 demo → 端到端全链路。
 
 ## 更新日志
+
+**2026-10-24 — 模拟面试 / JD 对比 / 简历评审 / 学习进度 / 用量 / 备份 / 鉴权**
+
+- 新增「模拟面试」Tab：AI 面试官按简历和考点连续追问 8-10 题（项目深挖 → 原理 → 排障 → 系统设计），一次只问一个问题，答完出面试官视角评分报告（总分 + 分维度 + 没接住的追问 + 7 天练习建议）；支持标准 / 压力面两种模式，会话自动落库保留最近 5 场
+- 画像页新增「JD 对比」：粘贴真实 JD，逐条对照简历输出扛得住的 / 缺口（按严重度）/ 面试前优先动作 / 缺口话术
+- 画像页新增「简历评审」：逐行模拟"这一条我会怎么追问"，给出改写前后的句子和可直接删掉的内容
+- 系统课程章节支持学习进度标记（未学 → 已学 → 已掌握，点击章节行末按钮切换），课程页显示掌握统计
+- 顶栏新增 LLM token 用量统计（`/api/usage`，累计落盘到 `data/usage.json`）
+- 数据安全：每次写入前对 `db.json` 做节流快照到 `data/backups/`（默认保留 10 份）；新增可选 `ACCESS_TOKEN` 访问鉴权（设置后所有 API 需带令牌，前端自动引导输入）
+- 重排大纲时旧讲义不再直接丢弃，无同名章节的旧讲义归档进 `course.orphanLessons`
+- 开源基建：Issue/PR 模板、`CONTRIBUTING.md`、英文版 `README.en.md`
 
 **2026-10-22c — 考点覆盖硬校验**
 

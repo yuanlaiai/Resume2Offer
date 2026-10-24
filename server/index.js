@@ -9,7 +9,8 @@ import { startJob, getJob } from './jobs.js';
 import { extractResume, normalizeText } from './extract.js';
 import { fixFileName } from './filename.js';
 import { describeLLM, LLMError } from './llm.js';
-import { runAnalyze, runMaterials, runQuiz, runGrade, runPlan, runExpand, runReport, runCourses, runLessons, runChat, prefillRole, runFlashcards, reviewCard, runQuickCard, runFeynman, dailyPlan } from './pipeline.js';
+import { runAnalyze, runMaterials, runQuiz, runGrade, runPlan, runExpand, runReport, runCourses, runLessons, runChat, prefillRole, runFlashcards, reviewCard, runQuickCard, runFeynman, dailyPlan, runMockStart, runMockTurn, runMockFinish, runJd, runResumeReview, setChapterProgress } from './pipeline.js';
+import { usageSummary } from './usage.js';
 import { toMarkdown, materialMarkdown, reportMarkdown, courseMarkdown, lessonMarkdown } from './export.js';
 
 const app = express();
@@ -21,6 +22,19 @@ const upload = multer({
   limits: { fileSize: config.maxUploadMb * 1024 * 1024, files: 1 },
 });
 
+/* ---------------- 可选访问鉴权 ----------------
+ * 设置 ACCESS_TOKEN 后，所有 /api（除 health）都要带 x-token 头或 ?token= 参数。
+ * 不设置则完全开放，本地使用零负担。
+ */
+app.use((req, res, next) => {
+  const token = config.accessToken;
+  if (!token) return next();
+  if (!req.path.startsWith('/api/') || req.path === '/api/health') return next();
+  const given = req.get('x-token') || req.query.token || '';
+  if (given === token) return next();
+  return res.status(401).json({ error: '需要访问令牌（ACCESS_TOKEN）', authRequired: true });
+});
+
 /* ---------------- 基础信息 ---------------- */
 
 app.get('/api/health', (req, res) => {
@@ -29,8 +43,13 @@ app.get('/api/health', (req, res) => {
     ready: llmReady(),
     demo: config.demo,
     llm: describeLLM(),
+    authRequired: Boolean(config.accessToken),
     version: '0.1.0',
   });
+});
+
+app.get('/api/usage', (req, res) => {
+  res.json(usageSummary());
 });
 
 app.get('/api/sample', (req, res) => {
@@ -280,6 +299,84 @@ app.get('/api/analyses/:id/daily', (req, res) => {
   const record = store.get(req.params.id);
   if (!record) return res.status(404).json({ error: '记录不存在' });
   res.json(dailyPlan(record));
+});
+
+/* ---------------- 模拟面试 ---------------- */
+
+// 开场（直接响应，等面试官"走进来"）
+app.post('/api/analyses/:id/mock/start', async (req, res, next) => {
+  try {
+    const record = store.get(req.params.id);
+    if (!record) return res.status(404).json({ error: '记录不存在' });
+    if (!llmReady()) return res.status(503).json({ error: '未配置模型' });
+    const mode = req.body?.mode === 'pressure' ? 'pressure' : 'standard';
+    const session = await runMockStart({ analysisId: record.id, mode });
+    res.json({ session });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 答一题（直接响应，对话感）
+app.post('/api/analyses/:id/mock/turn', async (req, res, next) => {
+  try {
+    const record = store.get(req.params.id);
+    if (!record) return res.status(404).json({ error: '记录不存在' });
+    if (!llmReady()) return res.status(503).json({ error: '未配置模型' });
+    const sessionId = String(req.body?.sessionId || '');
+    const answer = String(req.body?.answer || '').slice(0, 6000);
+    if (!sessionId) return res.status(400).json({ error: '缺少 sessionId' });
+    const session = await runMockTurn({ analysisId: record.id, sessionId, answer });
+    res.json({ session });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 收尾出报告（任务）
+app.post('/api/analyses/:id/mock/finish', (req, res, next) => {
+  const record = store.get(req.params.id);
+  if (!record) return res.status(404).json({ error: '记录不存在' });
+  const sessionId = String(req.body?.sessionId || '');
+  if (!sessionId) return res.status(400).json({ error: '缺少 sessionId' });
+  const jobId = startJob(['面试官写评审笔记'], (ctx) =>
+    runMockFinish(ctx, { analysisId: record.id, sessionId }),
+  );
+  res.json({ jobId });
+});
+
+/* ---------------- JD 对比 / 简历评审 ---------------- */
+
+app.post('/api/analyses/:id/jd', (req, res, next) => {
+  const record = store.get(req.params.id);
+  if (!record) return res.status(404).json({ error: '记录不存在' });
+  const jdText = String(req.body?.jdText || '').trim();
+  if (jdText.length < 30) return res.status(400).json({ error: 'JD 内容太短，请粘贴完整职位描述' });
+  const jobId = startJob(['逐条对照 JD 与简历'], (ctx) => runJd(ctx, { analysisId: record.id, jdText }));
+  res.json({ jobId });
+});
+
+app.post('/api/analyses/:id/resume-review', (req, res, next) => {
+  const record = store.get(req.params.id);
+  if (!record) return res.status(404).json({ error: '记录不存在' });
+  const jobId = startJob(['模拟逐行追问'], (ctx) => runResumeReview(ctx, { analysisId: record.id }));
+  res.json({ jobId });
+});
+
+/* ---------------- 章节学习进度 ---------------- */
+
+app.post('/api/analyses/:id/progress', async (req, res, next) => {
+  try {
+    const record = store.get(req.params.id);
+    if (!record) return res.status(404).json({ error: '记录不存在' });
+    const chapterId = String(req.body?.chapterId || '');
+    const status = String(req.body?.status || '');
+    if (!chapterId) return res.status(400).json({ error: '缺少 chapterId' });
+    const progress = await setChapterProgress({ analysisId: record.id, chapterId, status });
+    res.json({ progress });
+  } catch (err) {
+    next(err);
+  }
 });
 
 app.get('/api/jobs/:id', (req, res) => {

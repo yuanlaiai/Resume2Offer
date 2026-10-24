@@ -1111,6 +1111,85 @@ export function mockChat(messages) {
     return reply(MATERIAL_TEMPLATE(title, depth));
   }
 
+  /* ---- 模拟面试（演示模式固定剧本） ---- */
+  if (system.includes('现在开始一场模拟面试')) {
+    return reply({
+      greeting: '你好，我是今天的面试官，我们直接开始。',
+      question: '先用 30 秒做个自我介绍，重点讲你最有把握的一段项目经历。',
+    });
+  }
+  if (system.includes('模拟面试中')) {
+    const n = (user.match(/【当前是第 (\d+) 个问题/) || [])[1];
+    const no = Number(n) || 1;
+    if (no >= 8) {
+      return reply({ reply: '好的，技术面就先到这里，考察得差不多了，今天聊到这。', probe: '收尾', questionNo: no + 1, done: true });
+    }
+    const bank = [
+      ['你刚才提到效果提升，具体数字是怎么测出来的？基线是什么？', '数字归因'],
+      ['这套链路里你最不敢动的一块是什么？为什么？', '风险意识'],
+      ['如果流量翻十倍，第一个扛不住的是哪个环节？', '容量估算'],
+      ['线上出过最严重的一次问题是什么？你怎么定位的？', '排障能力'],
+      ['同样的需求用另一套方案做，你会怎么取舍？', '选型对比'],
+      ['你说的这个机制，底层是怎么实现的？讲关键路径。', '原理深度'],
+      ['如果让你重新设计一遍，你会改哪两处？', '复盘能力'],
+    ];
+    const [q, probe] = bank[(no - 1) % bank.length];
+    return reply({ reply: q, probe, questionNo: no + 1, done: false });
+  }
+  if (system.includes('这场模拟面试结束了')) {
+    return reply({
+      overall: 62,
+      verdict: '待定：项目经历真实但深度不够，追问两层就露出边界，建议补一周原理再约一面。',
+      dimensions: [
+        { name: '项目深度', score: 70, comment: '链路讲得顺，但数字归因含糊："效果提升明显"没有基线和口径。' },
+        { name: '原理理解', score: 55, comment: '机制问题停在"是这么用的"，问到关键路径开始绕。' },
+        { name: '表达结构', score: 65, comment: '回答有框架但经常一口气讲完不给面试官接口。' },
+      ],
+      highlights: ['主动用项目里的真实 badcase 解释设计动机，比背概念可信。'],
+      misses: ['被追问"基线怎么测的"没有正面回答。', '容量估算题只给了经验值，没有推导。'],
+      practice: ['给简历里每个数字写清口径、基线、测法。', '挑两个核心机制画关键路径图，脱稿讲 3 分钟。'],
+    });
+  }
+
+  /* ---- JD 对比 / 简历评审（演示） ---- */
+  if (system.includes('候选人贴来了一份真实 JD')) {
+    return reply({
+      headline: '整体匹配度不错，最大的错位是 JD 要的"高并发治理"在简历里只有单机故事。',
+      fitScore: 72,
+      matches: [
+        { jd: '3 年以上后端开发经验', evidence: '8 年研发经验，主导过 4 人小团队', strength: '富余' },
+        { jd: '熟悉 MySQL 调优与分库分表', evidence: '4 亿行表 ShardingSphere 分片治理', strength: '够用' },
+      ],
+      gaps: [
+        { jd: '有百万级 QPS 系统经验', why: '简历里峰值只写到万级，缺少多机房与限流演练故事', severity: '高' },
+        { jd: '熟悉 K8s 生态与 Service Mesh', why: '有容器化改造经历，但 mesh 只在生产周边接触过', severity: '中' },
+      ],
+      actions: ['把 QPS 故事补成压测报告：目标值、瓶颈、扩容动作、结果。', '准备一段"为什么没上 mesh、什么时候会上"的取舍回答。'],
+      talking: ['被问到高并发时先给量级再给结论："我们当时 X 量级，做法是…如果是百万级，我会先改 Y"。'],
+    });
+  }
+  if (system.includes('你审这份简历的方式很特别')) {
+    return reply({
+      headline: '最容易被撕开的口子：项目成果全是形容词，没有一处可以被追问的数字。',
+      grill: [
+        {
+          quote: '负责核心链路的性能优化，效果提升明显',
+          question: '"明显"是多少？基线怎么测的？压测工具和口径是什么？',
+          risk: '面试官会认定你只是参与者不是负责人',
+          prepare: '补上 before/after 两组数字 + 测量口径 + 你的具体动作。',
+        },
+      ],
+      rewrite: [
+        {
+          before: '负责核心链路的性能优化，效果提升明显',
+          after: '主导订单链路压测与优化：定位连接池瓶颈，P99 从 820ms 降到 310ms，撑住 3 倍峰值流量',
+          why: '有动作、有数字、有边界，每个词都能被追问也都能接住。',
+        },
+      ],
+      cut: ['"精通"开头的技能清单里与项目无关的条目——写了就会被问，接不住就删。'],
+    });
+  }
+
   if (system.includes('面试准备报告')) return reply(REPORT);
 
   if (system.includes('出一套测验题')) return reply(QUIZ);

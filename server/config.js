@@ -15,6 +15,10 @@ export const config = {
   publicDir: path.join(root, 'public'),
   maxUploadMb: 10,
   demo: process.env.DEMO_MODE === '1',
+  // 可选访问鉴权：设置后所有 /api（除 /api/health）都要带 x-token 头或 ?token= 参数
+  accessToken: (process.env.ACCESS_TOKEN || '').trim(),
+  // 自动备份：写入前快照 db.json，最多保留 keep 份
+  backupKeep: num(process.env.BACKUP_KEEP, 10),
   search: {
     // tavily | bocha | brave | serper | searxng | custom
     provider: (process.env.SEARCH_PROVIDER || 'tavily').trim().toLowerCase(),

@@ -18,6 +18,11 @@ import {
   buildQuickCardPrompt,
   buildFlashcardsPrompt,
   buildFeynmanPrompt,
+  buildMockStartPrompt,
+  buildMockTurnPrompt,
+  buildMockReportPrompt,
+  buildJdPrompt,
+  buildResumeReviewPrompt,
   depthSpec,
   courseDepthSpec,
   DEPTHS,
@@ -1427,4 +1432,210 @@ export function dailyPlan(record) {
     totalCards: cards.length,
     mastered: cards.filter((c) => c.stage >= SRS_INTERVALS.length - 1).length,
   };
+}
+
+/* ---------------- 模拟面试 ---------------- */
+
+const strOr = (v) => (typeof v === 'string' ? v.trim() : '');
+
+function findMockSession(record, sessionId) {
+  const sessions = record.mocks || [];
+  return sessions.find((m) => m.id === sessionId) || null;
+}
+
+/** 开场：面试官进场，抛第一个问题 */
+export async function runMockStart({ analysisId, mode = 'standard' }) {
+  const record = store.get(analysisId);
+  if (!record) throw new Error('找不到这份简历分析');
+
+  const out = await chatJSON(
+    buildMockStartPrompt({
+      profile: record.profile,
+      targetRole: record.targetRole,
+      level: record.level,
+      groups: record.groups,
+      mode,
+    }),
+    { temperature: 0.6, maxTokens: 1200 },
+  );
+
+  const session = {
+    id: store.newId('mk'),
+    mode: mode === 'pressure' ? 'pressure' : 'standard',
+    status: 'live',
+    createdAt: new Date().toISOString(),
+    questionNo: 1,
+    transcript: [
+      { role: 'interviewer', content: [strOr(out.greeting), strOr(out.question)].filter(Boolean).join(' '), at: new Date().toISOString() },
+    ],
+    report: null,
+  };
+  const mocks = [session, ...(record.mocks || [])].slice(0, 5);
+  await store.update(record.id, { mocks });
+  return session;
+}
+
+/** 候选人答一题，面试官追问下一题 */
+export async function runMockTurn({ analysisId, sessionId, answer }) {
+  const record = store.get(analysisId);
+  if (!record) throw new Error('找不到这份简历分析');
+  const session = findMockSession(record, sessionId);
+  if (!session) throw new Error('面试会话不存在');
+  if (session.status !== 'live') throw new Error('这场面试已经结束了');
+  if (!strOr(answer)) throw new Error('回答内容不能为空');
+
+  session.transcript.push({ role: 'candidate', content: String(answer).slice(0, 6000), at: new Date().toISOString() });
+
+  const out = await chatJSON(
+    buildMockTurnPrompt({
+      profile: record.profile,
+      targetRole: record.targetRole,
+      level: record.level,
+      groups: record.groups,
+      transcript: session.transcript,
+      mode: session.mode,
+      questionNo: session.questionNo,
+    }),
+    { temperature: 0.6, maxTokens: 1600 },
+  );
+
+  session.transcript.push({
+    role: 'interviewer',
+    content: strOr(out.reply) || '（面试官沉默了一下）继续。',
+    probe: strOr(out.probe),
+    at: new Date().toISOString(),
+  });
+  session.questionNo = Number(out.questionNo) || session.questionNo + 1;
+  session.done = Boolean(out.done);
+
+  const mocks = [session, ...(record.mocks || []).filter((m) => m.id !== session.id)];
+  await store.update(record.id, { mocks });
+  return session;
+}
+
+/** 收尾：生成面试官评审报告 */
+export async function runMockFinish(ctx, { analysisId, sessionId }) {
+  const record = store.get(analysisId);
+  if (!record) throw new Error('找不到这份简历分析');
+  const session = findMockSession(record, sessionId);
+  if (!session) throw new Error('面试会话不存在');
+  if (session.report) return session;
+
+  ctx.step(0.2, '面试官正在写评审笔记');
+  const report = await chatJSON(
+    buildMockReportPrompt({
+      targetRole: record.targetRole,
+      level: record.level,
+      transcript: session.transcript,
+    }),
+    { temperature: 0.3, maxTokens: 3200 },
+  );
+
+  session.status = 'done';
+  session.done = true;
+  session.finishedAt = new Date().toISOString();
+  session.report = {
+    overall: Number(report.overall) || 0,
+    verdict: strOr(report.verdict),
+    dimensions: arr(report.dimensions)
+      .slice(0, 6)
+      .map((d) => ({ name: strOr(d.name), score: clamp(d.score, 0, 100, 0), comment: strOr(d.comment) })),
+    highlights: arr(report.highlights).map(str).filter(Boolean).slice(0, 4),
+    misses: arr(report.misses).map(str).filter(Boolean).slice(0, 6),
+    practice: arr(report.practice).map(str).filter(Boolean).slice(0, 6),
+  };
+
+  const mocks = [session, ...(record.mocks || []).filter((m) => m.id !== session.id)];
+  await store.update(record.id, { mocks });
+  ctx.tick(1, '评审报告已生成');
+  return session;
+}
+
+/* ---------------- JD 对比 ---------------- */
+
+export async function runJd(ctx, { analysisId, jdText }) {
+  const record = store.get(analysisId);
+  if (!record) throw new Error('找不到这份简历分析');
+
+  ctx.step(0.2, '逐条对照 JD 与简历');
+  const data = await chatJSON(
+    buildJdPrompt({
+      profile: record.profile,
+      targetRole: record.targetRole,
+      level: record.level,
+      jdText,
+    }),
+    { temperature: 0.35, maxTokens: 4200 },
+  );
+
+  const jd = {
+    createdAt: new Date().toISOString(),
+    jdText: String(jdText).slice(0, 3000),
+    headline: strOr(data.headline),
+    fitScore: clamp(data.fitScore, 0, 100, 0),
+    matches: arr(data.matches)
+      .slice(0, 8)
+      .map((m) => ({ jd: strOr(m.jd), evidence: strOr(m.evidence), strength: strOr(m.strength) }))
+      .filter((m) => m.jd),
+    gaps: arr(data.gaps)
+      .slice(0, 8)
+      .map((m) => ({ jd: strOr(m.jd), why: strOr(m.why), severity: strOr(m.severity) }))
+      .filter((m) => m.jd),
+    actions: arr(data.actions).map(str).filter(Boolean).slice(0, 6),
+    talking: arr(data.talking).map(str).filter(Boolean).slice(0, 4),
+  };
+  await store.update(record.id, { jd });
+  ctx.tick(1, 'JD 对比完成');
+  return jd;
+}
+
+/* ---------------- 简历改写建议（面试官视角） ---------------- */
+
+export async function runResumeReview(ctx, { analysisId }) {
+  const record = store.get(analysisId);
+  if (!record) throw new Error('找不到这份简历分析');
+  if (!record.resumeText) throw new Error('这份记录没有保存简历原文');
+
+  ctx.step(0.2, '逐行模拟追问');
+  const data = await chatJSON(
+    buildResumeReviewPrompt({
+      profile: record.profile,
+      targetRole: record.targetRole,
+      level: record.level,
+      resumeText: record.resumeText,
+    }),
+    { temperature: 0.35, maxTokens: 4200 },
+  );
+
+  const review = {
+    createdAt: new Date().toISOString(),
+    headline: strOr(data.headline),
+    grill: arr(data.grill)
+      .slice(0, 8)
+      .map((g) => ({ quote: strOr(g.quote), question: strOr(g.question), risk: strOr(g.risk), prepare: strOr(g.prepare) }))
+      .filter((g) => g.quote && g.question),
+    rewrite: arr(data.rewrite)
+      .slice(0, 8)
+      .map((r) => ({ before: strOr(r.before), after: strOr(r.after), why: strOr(r.why) }))
+      .filter((r) => r.before && r.after),
+    cut: arr(data.cut).map(str).filter(Boolean).slice(0, 5),
+  };
+  await store.update(record.id, { resumeReview: review });
+  ctx.tick(1, '简历评审完成');
+  return review;
+}
+
+/* ---------------- 章节学习进度 ---------------- */
+
+const PROGRESS_STATES = ['none', 'learned', 'mastered'];
+
+export async function setChapterProgress({ analysisId, chapterId, status }) {
+  const record = store.get(analysisId);
+  if (!record) throw new Error('找不到这份简历分析');
+  if (!PROGRESS_STATES.includes(status)) throw new Error('进度状态不合法');
+  const progress = { ...(record.progress || {}) };
+  if (status === 'none') delete progress[chapterId];
+  else progress[chapterId] = status;
+  await store.update(record.id, { progress });
+  return progress;
 }

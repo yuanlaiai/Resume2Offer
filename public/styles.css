@@ -1457,3 +1457,68 @@ h1.hero-title em {
 @media print {
   .study-hero, .study-block, .daily-row { box-shadow: none; page-break-inside: avoid; }
 }
+
+/* ---------- 模拟面试 ---------- */
+.mock-card { max-width: 860px; }
+.mock-sessions { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; }
+.mock-log {
+  margin: 14px 0; padding: 16px; border: 1px solid var(--line); border-radius: 14px;
+  background: var(--surface-2); display: grid; gap: 14px; max-height: 480px; overflow-y: auto;
+}
+.m-msg { max-width: 88%; }
+.m-msg.me { justify-self: end; text-align: right; }
+.m-who { font-size: 11px; font-weight: 700; color: var(--muted); margin-bottom: 4px; display: flex; gap: 8px; align-items: center; }
+.m-msg.me .m-who { justify-content: flex-end; }
+.m-probe { font-weight: 500; color: var(--brand-deep); background: var(--brand-soft); border-radius: 6px; padding: 1px 6px; }
+.m-text {
+  display: inline-block; text-align: left; font-size: 14px; line-height: 1.7; white-space: pre-wrap;
+  padding: 10px 13px; border-radius: 13px; border: 1px solid var(--line); background: #fff;
+}
+.m-msg.itv .m-text { border-top-left-radius: 4px; }
+.m-msg.me .m-text { background: var(--brand-soft); border-color: var(--brand-line); border-top-right-radius: 4px; }
+.mock-input textarea {
+  width: 100%; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 12px;
+  padding: 12px 14px; font: inherit; font-size: 14px; resize: vertical; background: #fff;
+}
+.mock-input textarea:focus { outline: none; border-color: var(--brand); }
+.mock-input-bar { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.mock-hint { font-size: 12px; color: var(--muted); }
+.mock-report { border-top: 1px dashed var(--line-strong); padding-top: 16px; margin-top: 4px; }
+.mr-head { display: flex; gap: 14px; align-items: center; margin-bottom: 14px; }
+.mr-verdict { font-size: 15px; font-weight: 600; }
+.mr-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.mr-dim { margin-bottom: 10px; }
+.mr-dim-head { display: flex; justify-content: space-between; font-size: 13px; }
+
+/* ---------- JD 对比 / 简历评审 ---------- */
+.jd-hint { font-size: 13px; color: var(--text-2); line-height: 1.7; margin: 0 0 12px; }
+.jd-hint + textarea {
+  width: 100%; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 12px;
+  padding: 12px 14px; font: inherit; font-size: 13.5px; resize: vertical; background: #fff;
+}
+.jd-hint + textarea:focus { outline: none; border-color: var(--brand); }
+.jd-head { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.jd-head p { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--text); }
+.jd-headline { font-size: 13.5px; line-height: 1.7; margin: 0 0 12px; }
+.jd-sec { margin: 14px 0; font-size: 13px; }
+.jd-sec > b { display: block; font-size: 12px; color: var(--muted); font-weight: 700; letter-spacing: 0.04em; margin-bottom: 8px; }
+.jd-row { display: flex; gap: 10px; padding: 8px 0; border-top: 1px dashed var(--line); }
+.jd-tag {
+  flex: none; font-size: 11px; font-weight: 700; border-radius: 7px; padding: 2px 8px; height: fit-content;
+  background: var(--brand-soft); color: var(--brand-deep); border: 1px solid var(--brand-line);
+}
+.jd-row.miss .jd-tag { background: var(--warn-bg); color: var(--warn); border-color: var(--warn-line); }
+.jd-jd { font-weight: 600; }
+.jd-ev { font-size: 12.5px; color: var(--text-2); margin-top: 2px; line-height: 1.6; }
+.rv-row { padding: 10px 0; border-top: 1px dashed var(--line); }
+.rv-quote { font-size: 12.5px; color: var(--text-2); font-style: italic; margin-bottom: 6px; }
+.rv-after { font-size: 13.5px; background: var(--brand-soft); border: 1px solid var(--brand-line); border-radius: 10px; padding: 8px 11px; }
+.fq { font-size: 12.5px; color: var(--text-2); line-height: 1.7; margin-top: 3px; }
+.gap-text { color: var(--warn); }
+.ok-text { color: var(--brand-deep); }
+
+/* ---------- 章节学习进度 ---------- */
+.chapter-row.learned .ch-title { color: var(--brand-deep); }
+.ch-prog b { font-size: 12px; }
+.ch-prog:hover { border-color: var(--brand); color: var(--brand-deep); }
+@media print { .ch-prog, .mock-input, .mock-sessions { display: none !important; } }

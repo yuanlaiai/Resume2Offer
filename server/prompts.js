@@ -957,3 +957,209 @@ ${(explanation || '').slice(0, 4000)}
     },
   ];
 }
+
+/* ---------------- 模拟面试 ---------------- */
+
+const MOCK_RULES = `面试规则（必须遵守）：
+1) 一次只问一个问题，等候选人回答后再追问；不连环发问，不一次抛多问。
+2) 追问要针对候选人上一条回答里的模糊点、数字、边界条件——他没讲清的地方就是你深挖的地方。
+3) 每 2-3 个问题换一个考察面，覆盖：自我介绍 → 项目深挖 → 技术原理 → 排障/场景题 → 系统设计/开放题 → 反问环节前的压力题。
+4) 面试官不给标准答案、不点评对错（真实面试也没有），只追问和引导；过渡语自然简短。
+5) 问题要结合简历：他写了什么就问什么，写了个数字就问归因。
+6) 中文提问，技术名词保留英文原文。`;
+
+export function buildMockStartPrompt({ profile, targetRole, level, groups, mode = 'standard' }) {
+  const topics = (groups || [])
+    .map((g) => `- ${g.name}：${(g.topics || []).slice(0, 6).map((t) => t.title).join('；')}`)
+    .join('\n');
+
+  return [
+    {
+      role: 'system',
+      content: `${INTERVIEWER}
+${ROLE_ADAPT}
+${MOCK_RULES}
+
+现在开始一场模拟面试，你扮演面试官，对面的候选人即将参加${targetRole || '目标岗位'}的面试（${level || '级别未注明'}）。
+${mode === 'pressure' ? '本场是「压力面」模式：语气更冷、追问更深，候选人答不上来时不解围，会沉默两秒后继续加码。' : '本场是标准模式：专业但不咄咄逼人。'}
+开场白先用一两句话进入角色（例如让对方做 30 秒自我介绍或直接切入），然后抛出第一个问题。问题要基于简历里的项目经历。
+${JSON_RULE}
+
+JSON 结构：
+{
+  "greeting": "进入角色的一句话开场（不超过 40 字）",
+  "question": "第一个问题"
+}`,
+    },
+    {
+      role: 'user',
+      content: `【候选人简历】
+${(profile?.summary || '').slice(0, 3000)}
+
+【目标岗位】${targetRole || ''}${level ? `（${level}）` : ''}
+
+【这场面试要覆盖的考察面（按此安排提问顺序）】
+${topics || '（无考点清单，按该岗位通用面试体系提问）'}`,
+    },
+  ];
+}
+
+export function buildMockTurnPrompt({ profile, targetRole, level, groups, transcript, mode = 'standard', questionNo = 1 }) {
+  const topics = (groups || [])
+    .map((g) => `- ${g.name}：${(g.topics || []).slice(0, 6).map((t) => t.title).join('；')}`)
+    .join('\n');
+
+  const dialog = (transcript || [])
+    .slice(-14)
+    .map((m) => `${m.role === 'candidate' ? '候选人' : '面试官'}：${String(m.content || '').slice(0, 2000)}`)
+    .join('\n\n');
+
+  return [
+    {
+      role: 'system',
+      content: `${INTERVIEWER}
+${ROLE_ADAPT}
+${MOCK_RULES}
+
+你正在${targetRole || '目标岗位'}的模拟面试中（${level || '级别未注明'}，${mode === 'pressure' ? '压力面模式' : '标准模式'}），下面是到目前为止的对话。
+候选人刚刚回答了你的问题。你的任务：针对他回答里的模糊点、没讲透的数字、可疑的结论给出下一个追问；如果他的回答已经比较完整，就换下一个考察面（参考考察面清单，别在同一个点上问超过 3 轮）。
+总题量控制在 8-10 个问题：当你判断已经考察得足够充分、或者发现明显需要收尾时，把 done 设为 true，reply 里给出面试官视角的一句收尾话（例如"好的，今天先聊到这里"）。
+${JSON_RULE}
+
+JSON 结构：
+{
+  "reply": "你作为面试官说的话（可以有一句简短过渡，但核心是下一个问题）",
+  "probe": "你这次追问的点（内部备注，10 字以内）",
+  "questionNo": 数字,
+  "done": false
+}`,
+    },
+    {
+      role: 'user',
+      content: `【对话至今】
+${dialog}
+
+【考察面清单（别遗漏，也别重复过多次）】
+${topics || '（无，按通用体系）'}
+
+【当前是第 ${questionNo} 个问题之后的回答】`,
+    },
+  ];
+}
+
+export function buildMockReportPrompt({ targetRole, level, transcript }) {
+  const dialog = (transcript || [])
+    .map((m) => `${m.role === 'candidate' ? '候选人' : '面试官'}：${String(m.content || '').slice(0, 2000)}`)
+    .join('\n\n');
+
+  return [
+    {
+      role: 'system',
+      content: `${INTERVIEWER}
+${ROLE_ADAPT}
+
+这场模拟面试结束了。现在你从面试官视角写一份内部评审笔记：这个人如果出现在真实面试里，你会给几分、为什么、他接下来 7 天该练什么。
+评分要严格：宁低勿高，"背过"和"真懂"必须区分开；引用他自己的原话当证据，不写客套话。
+${JSON_RULE}
+
+JSON 结构：
+{
+  "overall": 0-100,
+  "verdict": "一句话结论：过 / 待定 / 挂，以及为什么（不超过 60 字）",
+  "dimensions": [
+    {"name": "维度名（如 项目深度 / 原理理解 / 表达结构 / 抗压与诚实度）", "score": 0-100, "comment": "引用他的回答做证据，指出好在哪差在哪"}
+  ],
+  "highlights": ["面试中真实加分的 2-3 处回答"],
+  "misses": ["答不上来或答糊的追问，按严重程度排序，每条注明原问题是什么"],
+  "practice": ["接下来 7 天该练的具体动作，3-5 条，可直接执行"]
+}`,
+    },
+    {
+      role: 'user',
+      content: `【目标岗位】${targetRole || ''}${level ? `（${level}）` : ''}
+
+【完整面试记录】
+${dialog.slice(0, 16000)}`,
+    },
+  ];
+}
+
+/* ---------------- JD 对比 ---------------- */
+
+export function buildJdPrompt({ profile, targetRole, level, jdText }) {
+  return [
+    {
+      role: 'system',
+      content: `${INTERVIEWER}
+${ROLE_ADAPT}
+
+候选人贴来了一份真实 JD。你的任务：把 JD 和这份简历逐条对照，指出哪些要求他扛得住、哪些是缺口、面试前 7 天应该优先补什么。
+结论必须落到 JD 的具体条目和简历的具体经历上，两边都要引用原文关键词；不许写"加强学习"这种空话。
+${JSON_RULE}
+
+JSON 结构：
+{
+  "headline": "一句话：这份 JD 对他来说难度如何、最大的一处错位是什么（不超过 50 字）",
+  "fitScore": 0-100,
+  "matches": [
+    {"jd": "JD 原文条目（截短）", "evidence": "简历/经历里对应的东西", "strength": "够用/勉强/富余"}
+  ],
+  "gaps": [
+    {"jd": "JD 原文条目（截短）", "why": "为什么是缺口：简历里完全没有，还是深度不够", "severity": "高/中/低"}
+  ],
+  "actions": ["面试前优先做的 3-5 件事，可直接执行，按性价比排序"],
+  "talking": ["面试里怎么把缺口说成故事：1-2 条话术建议"]
+}`,
+    },
+    {
+      role: 'user',
+      content: `【目标岗位】${targetRole || ''}${level ? `（${level}）` : ''}
+
+【候选人画像摘要】
+${(profile?.summary || '').slice(0, 2500)}
+
+【JD 原文】
+${String(jdText || '').slice(0, 6000)}`,
+    },
+  ];
+}
+
+/* ---------------- 简历改写建议（面试官视角） ---------------- */
+
+export function buildResumeReviewPrompt({ profile, targetRole, level, resumeText }) {
+  return [
+    {
+      role: 'system',
+      content: `${INTERVIEWER}
+${ROLE_ADAPT}
+
+你审这份简历的方式很特别：假设候选人就坐在对面，你逐行问自己"这一条我会怎么追问？他接得住吗？"
+输出三类问题：① 一定会被深挖、且他必须提前准备的表述；② 写法有硬伤（空洞、无数字、夸大、职责不清）需要改写的；③ 可以直接删掉或一笔带过的。改写建议要给出可直接替换的句子。
+${JSON_RULE}
+
+JSON 结构：
+{
+  "headline": "一句话：这份简历现在拿去面${targetRole || '目标岗位'}，最先被撕开的口子在哪（不超过 50 字）",
+  "grill": [
+    {"quote": "简历原文（截短）", "question": "面试官会怎么追问", "risk": "接不住的后果", "prepare": "该怎么准备这一条"}
+  ],
+  "rewrite": [
+    {"before": "简历原文", "after": "改写后的句子", "why": "改写逻辑（有数字、有边界、有归因）"}
+  ],
+  "cut": ["可以直接删掉或弱化的内容，说明原因"]
+}
+
+要求：grill 4-6 条，rewrite 3-5 条，cut 1-3 条；quote/before 必须是简历里真实存在的原句，不许编造。`,
+    },
+    {
+      role: 'user',
+      content: `【目标岗位】${targetRole || ''}${level ? `（${level}）` : ''}
+
+【候选人画像摘要】
+${(profile?.summary || '').slice(0, 2000)}
+
+【简历全文】
+${String(resumeText || '').slice(0, 12000)}`,
+    },
+  ];
+}

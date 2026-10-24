@@ -1,5 +1,6 @@
 import { config } from './config.js';
 import { mockChat } from './mock.js';
+import { recordUsage } from './usage.js';
 
 /**
  * OpenAI 兼容的 Chat Completions 客户端。
@@ -114,6 +115,7 @@ export async function chatDetailed(messages, opts = {}) {
         );
       }
       if (truncated) console.warn(`[llm] 回复仍被截断（max_tokens=${maxTokens}），内容可能不完整`);
+      if (out.usage) recordUsage(out.usage, config.llm.model);
       return out;
     } catch (err) {
       const retryable = err instanceof LLMError ? err.retryable || err.name === 'TimeoutError' : true;

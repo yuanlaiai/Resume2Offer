@@ -10,10 +10,33 @@ import { fixFileName } from './filename.js';
  */
 
 const DB_FILE = path.join(config.dataDir, 'db.json');
+const BACKUP_DIR = path.join(config.dataDir, 'backups');
+const BACKUP_INTERVAL = 30 * 60 * 1000; // 两次备份至少间隔 30 分钟，避免频繁写放大
 let db = { analyses: {}, meta: { version: 1 } };
 let queue = Promise.resolve();
+let lastBackupAt = 0;
 
 let healed = 0;
+
+/** 写入前快照：保留最近 config.backupKeep 份，重排/误操作可回滚 */
+async function backup() {
+  if (!fs.existsSync(DB_FILE)) return;
+  const now = Date.now();
+  if (now - lastBackupAt < BACKUP_INTERVAL) return;
+  lastBackupAt = now;
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
+    await fs.promises.copyFile(DB_FILE, path.join(BACKUP_DIR, `db-${stamp}.json`));
+    const files = fs.readdirSync(BACKUP_DIR).filter((f) => f.startsWith('db-') && f.endsWith('.json')).sort();
+    const keep = Math.max(1, config.backupKeep);
+    for (const f of files.slice(0, Math.max(0, files.length - keep))) {
+      await fs.promises.unlink(path.join(BACKUP_DIR, f)).catch(() => {});
+    }
+  } catch (err) {
+    console.warn('[store] 备份失败（不影响主流程）：', err.message);
+  }
+}
 
 function load() {
   try {
@@ -43,9 +66,10 @@ if (healed) {
 }
 
 function persist() {
-  // 串行化写入，先写临时文件再 rename，避免半截文件
+  // 串行化写入，先写临时文件再 rename，避免半截文件；写入前做一次节流备份
   queue = queue.then(async () => {
     try {
+      await backup();
       fs.mkdirSync(config.dataDir, { recursive: true });
       const tmp = `${DB_FILE}.${process.pid}.tmp`;
       await fs.promises.writeFile(tmp, JSON.stringify(db), 'utf8');
