@@ -2881,6 +2881,7 @@ function panelMock() {
     <div class="mock-input">
       <textarea id="mock-answer" rows="3" placeholder="回答面试官的问题…（口头答完再把要点打进来，效果最好）"></textarea>
       <div class="mock-input-bar">
+        <button class="btn btn-ghost btn-sm mic-btn" id="mock-mic" hidden title="语音输入：说出来的话自动转成文字填进输入框">🎤 说话</button>
         <span class="mock-hint">Ctrl / ⌘ + Enter 发送</span>
         <span class="spacer"></span>
         <button class="btn btn-ghost btn-sm" id="mock-finish">结束并出报告</button>
@@ -2921,6 +2922,9 @@ function bindMock() {
     const answer = box?.value.trim();
     if (!box || !answer) return;
     if (!session || session.status !== 'live') return;
+    // 发送时停掉语音识别，避免它继续往旧输入框里写
+    const micBtn = document.getElementById('mock-mic');
+    if (micBtn?._rec) { try { micBtn._rec.stop(); } catch { /* ignore */ } }
     box.disabled = true;
     document.getElementById('mock-send').disabled = true;
     box.value = '';
@@ -2959,6 +2963,58 @@ function bindMock() {
       }
     });
     box.focus();
+  }
+
+  // 语音输入：浏览器原生识别（Chrome/Edge/Safari），不支持时按钮自动隐藏
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const mic = document.getElementById('mock-mic');
+  if (mic && !SR) mic.remove();
+  if (mic && SR) {
+    mic.hidden = false;
+    let rec = null;
+    let listening = false;
+    let base = '';
+    mic.addEventListener('click', () => {
+      if (listening) {
+        try { rec.stop(); } catch { /* ignore */ }
+        return;
+      }
+      rec = new SR();
+      rec.lang = 'zh-CN';
+      rec.continuous = true;
+      rec.interimResults = true;
+      // 保留输入框里已打的内容，语音续在后面
+      const cur = box.value.trimEnd();
+      base = cur ? `${cur}${/[。！？.!?\n]$/.test(cur) ? '\n' : '。'}\n` : '';
+      rec.onresult = (e) => {
+        let final = '';
+        let interim = '';
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const t = e.results[i][0].transcript;
+          if (e.results[i].isFinal) final += t;
+          else interim += t;
+        }
+        if (final) base += final;
+        box.value = base + interim;
+      };
+      rec.onstart = () => {
+        listening = true;
+        mic.classList.add('rec');
+        mic.textContent = '■ 停止';
+      };
+      rec.onend = () => {
+        listening = false;
+        mic.classList.remove('rec');
+        mic.textContent = '🎤 说话';
+        box.focus();
+      };
+      rec.onerror = (e) => {
+        if (e.error === 'not-allowed') toast('麦克风权限被拒绝，请在浏览器地址栏的权限设置里允许', 'err');
+        else if (e.error === 'network') toast('语音服务连不上（这个浏览器的语音识别可能需要特定网络）', 'err');
+      };
+      try { rec.start(); } catch { /* 已在运行 */ }
+      mic._rec = rec;
+    });
   }
 
   const finish = document.getElementById('mock-finish');

@@ -1522,3 +1522,15 @@ h1.hero-title em {
 .ch-prog b { font-size: 12px; }
 .ch-prog:hover { border-color: var(--brand); color: var(--brand-deep); }
 @media print { .ch-prog, .mock-input, .mock-sessions { display: none !important; } }
+
+/* ---------- 模拟面试语音输入 ---------- */
+.mic-btn.rec {
+  color: #dc2626;
+  border-color: #dc2626;
+  background: #fef2f2;
+  animation: micPulse 1.2s ease-in-out infinite;
+}
+@keyframes micPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
