@@ -124,7 +124,19 @@ async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   if (token) headers['x-token'] = token;
 
-  let res = await fetch(path, { ...opts, headers });
+  // 默认 120s 超时：服务重启/断网时请求不会无限挂起，浮层能正常报错而不是永远转圈
+  const timeoutMs = Number(opts.timeout) || 120000;
+  const doFetch = () => fetch(path, { ...opts, headers, signal: AbortSignal.timeout(timeoutMs) });
+
+  let res;
+  try {
+    res = await doFetch();
+  } catch (err) {
+    if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+      throw new Error('请求超时：服务可能刚重启过，请刷新页面后重试');
+    }
+    throw new Error('网络请求失败：请检查服务是否在线后刷新页面');
+  }
   if (res.status === 401) {
     const body = await res.clone().json().catch(() => ({}));
     if (body.authRequired) {
@@ -132,7 +144,7 @@ async function api(path, opts = {}) {
       if (input && input.trim()) {
         localStorage.setItem('r2o-token', input.trim());
         headers['x-token'] = input.trim();
-        res = await fetch(path, { ...opts, headers });
+        res = await doFetch();
       }
     }
   }
