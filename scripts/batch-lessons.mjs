@@ -35,8 +35,9 @@ const chunk = (arr, n) => arr.splice(0, n);
 
 let done = 0;
 let failed = 0;
+let consecFailed = 0; // 连续失败组计数：连续 4 组全败（如余额耗尽）时熔断退出
 const PAR = 3;
-while (queue.length) {
+while (queue.length && consecFailed < 4) {
   // 串行化取块：每 worker 取一组
   const groups = [];
   for (let i = 0; i < PAR && queue.length; i += 1) groups.push(queue.splice(0, 4));
@@ -45,15 +46,25 @@ while (queue.length) {
     const group = g[0][2];
     const chapterIds = g.map((x) => x[1]);
     const job = await post(`/api/analyses/${ID}/courses/${courseId}/lessons`, { chapterIds, depth: 'standard' });
-    await waitJob(job.jobId, `${group}-${gi}`);
-    done += chapterIds.length;
-    console.log(`[${new Date().toISOString().slice(11, 19)}] ${group} +${chapterIds.length} 章（累计 ${done}）`);
+    const result = await waitJob(job.jobId, `${group}-${gi}`);
+    const bad = (result?.failed || []).length;
+    done += chapterIds.length - bad;
+    failed += bad;
+    for (const f of result?.failed || []) console.error(`  [${group}] 章失败：${f.title} — ${String(f.error).slice(0, 120)}`);
+    if (!bad) console.log(`[${new Date().toISOString().slice(11, 19)}] ${group} +${chapterIds.length} 章（累计 ${done}）`);
+    else console.log(`[${new Date().toISOString().slice(11, 19)}] ${group} +${chapterIds.length - bad}/${chapterIds.length} 章（累计 ${done}，失败累计 ${failed}）`);
+    return bad === 0;
   }));
+  let okInWave = 0;
   for (const r of results) {
     if (r.status === 'rejected') {
-      failed += 1;
+      failed += 4;
       console.error('  一组失败：', String(r.reason?.message || r.reason).slice(0, 160));
+    } else if (r.value) {
+      okInWave += 1;
     }
   }
+  consecFailed = okInWave === 0 ? consecFailed + 1 : 0;
 }
-console.log(`\n完成：累计生成 ${done} 章，失败组 ${failed}`);
+if (consecFailed >= 4) console.error('\n连续 4 组全部失败，疑似模型服务不可用（余额/限流），提前退出');
+console.log(`\n完成：累计生成 ${done} 章，章失败 ${failed}，剩余 ${queue.length} 章未处理`);
