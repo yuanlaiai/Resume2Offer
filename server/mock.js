@@ -1136,7 +1136,8 @@ export function mockChat(messages) {
     const [q, probe] = bank[(no - 1) % bank.length];
     return reply({ reply: q, probe, questionNo: no + 1, done: false });
   }
-  if (system.includes('这场模拟面试结束了')) {
+  // 注意：参考答案提示词也以「这场模拟面试结束了」开头，报告分支必须用更独特的标记，且要放在参考答案分支之前判断不了——这里用报告独有的「内部评审笔记」
+  if (system.includes('内部评审笔记')) {
     return reply({
       overall: 62,
       verdict: '待定：项目经历真实但深度不够，追问两层就露出边界，建议补一周原理再约一面。',

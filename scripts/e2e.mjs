@@ -206,6 +206,66 @@ console.log(
   `qc="${qc.card.tldr.slice(0, 18)}…" fy=${fy.grade.score}分 weak=${daily.weakTopics.length} fresh=${daily.freshTopic ? daily.freshTopic.title.slice(0, 12) : '—'}`,
 );
 
+console.log('7e) 模拟面试（开场 → 追问 → 收尾报告 → 逐题参考答案 → 导出）...');
+const mkStart = await j(`/api/analyses/${an.analysisId}/mock/start`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ mode: 'standard' }),
+});
+const mk = mkStart.session;
+if (!mk.transcript?.[0]?.content) throw new Error('面试官没有开场');
+const mkTurn = await j(`/api/analyses/${an.analysisId}/mock/turn`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ sessionId: mk.id, answer: '项目是门店知识问答系统：文档解析、切片、混合检索接 rerank，我负责检索链路，命中率从 62% 提到 89%，日均 3 万次问答。' }),
+});
+if (mkTurn.session.transcript.length < 3) throw new Error('面试官没有追问');
+const mkDone = await waitJob((await j(`/api/analyses/${an.analysisId}/mock/finish`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ sessionId: mk.id }),
+})).jobId);
+if (mkDone.status !== 'done' || typeof mkDone.report?.overall !== 'number') throw new Error('评分报告没生成');
+if (!Array.isArray(mkDone.answers) || !mkDone.answers.length) throw new Error('逐题参考答案没生成');
+const mockMd = await fetch(`${BASE}/api/analyses/${an.analysisId}/mocks/${mk.id}.md`);
+const mockMdText = await mockMd.text();
+if (!mockMd.ok || !mockMdText.includes('逐题参考答案')) throw new Error('面试复盘导出缺少参考答案');
+console.log(`   ok: 报告 ${mkDone.report.overall} 分/${mkDone.report.dimensions.length} 维度，参考答案 ${mkDone.answers.length} 题，md=${mockMdText.length} 字`);
+
+console.log('7f) JD 对比 + 简历评审...');
+const jdRes = await waitJob((await j(`/api/analyses/${an.analysisId}/jd`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ jdText: '岗位职责：负责 AI 问答平台服务治理，要求 5 年后端经验，熟悉 K8s，有 RAG 落地经验者优先。任职要求：本科以上，沟通能力好。' }),
+})).jobId);
+if (typeof jdRes.fitScore !== 'number' || !jdRes.gaps?.length) throw new Error('JD 对比结果不完整');
+const rvRes = await waitJob((await j(`/api/analyses/${an.analysisId}/resume-review`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })).jobId);
+if (!rvRes.grill?.length || !rvRes.rewrite?.length) throw new Error('简历评审结果不完整');
+const jdMd = await fetch(`${BASE}/api/analyses/${an.analysisId}/jd.md`);
+const rvMd = await fetch(`${BASE}/api/analyses/${an.analysisId}/resume-review.md`);
+if (!jdMd.ok || !rvMd.ok) throw new Error('JD/评审导出失败');
+console.log(`   ok: JD ${jdRes.fitScore} 分/缺口 ${jdRes.gaps.length}，评审追问 ${rvRes.grill.length}/改写 ${rvRes.rewrite.length}`);
+
+console.log('7g) 章节学习进度...');
+const prog = await j(`/api/analyses/${an.analysisId}/progress`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ chapterId: firstCh.id, status: 'mastered' }),
+});
+if (prog.progress[firstCh.id] !== 'mastered') throw new Error('进度标记失败');
+const progBack = await j(`/api/analyses/${an.analysisId}/progress`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ chapterId: firstCh.id, status: 'none' }),
+});
+if (progBack.progress[firstCh.id]) throw new Error('进度重置失败');
+console.log('   ok: 标记已掌握 → 重置，双向通过');
+
+console.log('7h) 用量统计...');
+const usage = await j('/api/usage');
+if (typeof usage.totalCalls !== 'number' || typeof usage.totalTokens !== 'number') throw new Error('用量接口字段缺失');
+console.log(`   ok: ${usage.totalCalls} 次调用 / ${(usage.totalTokens / 1000).toFixed(1)}k tokens`);
+
 console.log('8) export.md & list...');
 const md = await fetch(`${BASE}/api/analyses/${an.analysisId}/export.md`);
 const mdText = await md.text();
