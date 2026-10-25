@@ -472,6 +472,25 @@ app.get('/api/analyses/:id/resume-review.md', (req, res) => {
   sendMd(res, reviewMarkdown(record.resumeReview, record), `${record.profile?.candidate?.name || '候选人'}-简历评审.md`);
 });
 
+/** 闪卡导出 Anki 可导入的 TSV（正面 / 背面 / 标签） */
+app.get('/api/analyses/:id/anki.txt', (req, res) => {
+  const record = store.get(req.params.id);
+  if (!record) return res.status(404).json({ error: '记录不存在' });
+  const cards = (record.flashcards || []).filter((c) => c.front && c.back?.length);
+  if (!cards.length) return res.status(404).json({ error: '还没有生成闪卡' });
+
+  const esc = (s) => String(s).replace(/\t/g, ' ').replace(/\n/g, '<br>');
+  const rows = [
+    '#separator:tab',
+    '#html:true',
+    '#tags column:3',
+    ...cards.map((c) => `${esc(c.front)}\t${esc(c.back.map((b) => `• ${b}`).join('<br>'))}\t${esc(c.topicTitle || '复习卡')}`),
+  ];
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(record.profile?.candidate?.name || 'flashcards')}-anki.txt"`);
+  res.send(rows.join('\n'));
+});
+
 /** 整门课程下载（含已生成讲义） */
 app.get('/api/analyses/:id/courses/:courseId.md', (req, res) => {
   const record = store.get(req.params.id);

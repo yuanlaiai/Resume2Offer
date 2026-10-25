@@ -243,7 +243,15 @@ function renderTopbar() {
     ? `<span class="pill ghost" title="本服务累计 LLM 用量（${state.usage.totalCalls} 次调用）">↯ ${(state.usage.totalTokens / 1000).toFixed(1)}k tok</span>`
     : '';
   const newBtn = state.record ? `<a class="btn btn-ghost btn-sm" href="#/">新建分析</a>` : '';
-  $topRight.innerHTML = `${modelPill}${usage}${newBtn}`;
+  // 多简历快速切换：顶栏下拉列出最近 8 份分析
+  const switcher = state.record && (state.history || []).length > 1
+    ? `<select id="resume-switch" class="input topbar-switch" title="切换到其他简历">
+        ${state.history.slice(0, 8).map((h) => `<option value="${esc(h.id)}" ${h.id === state.record.id ? 'selected' : ''}>${esc(h.candidate?.name || '未命名')}·${esc((h.targetRole || h.candidate?.title || '').slice(0, 12))}</option>`).join('')}
+      </select>`
+    : '';
+  $topRight.innerHTML = `${modelPill}${usage}${switcher}${newBtn}`;
+  const sw = document.getElementById('resume-switch');
+  if (sw) sw.addEventListener('change', () => { location.hash = `#/a/${sw.value}`; });
 }
 
 /* ---------------- 首页 ---------------- */
@@ -3076,6 +3084,12 @@ async function boot() {
   } catch {
     /* 用量展示失败不影响主流程 */
   }
+  try {
+    const { items } = await api('/api/analyses');
+    state.history = items;
+  } catch {
+    /* 历史列表失败不阻塞 */
+  }
   renderTopbar();
   route();
 }
@@ -3359,6 +3373,7 @@ function panelStudy() {
         <div class="ss-item hot"><b>${Math.max(dueCount, 0)}</b><span>到期待复习</span></div>
         <div class="ss-item"><b>${d ? d.mastered : 0}</b><span>已长期掌握</span></div>
       </div>
+      ${cards.length ? `<a class="btn btn-ghost btn-sm" style="position:absolute;right:18px;bottom:16px" href="/api/analyses/${r.id}/anki.txt" download title="下载 Anki 可导入的 TSV 文件">导出 Anki</a>` : ''}
     </div>`;
 
   const fcSection = cards.length
