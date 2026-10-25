@@ -1022,7 +1022,7 @@ function panelProfile() {
     <div class="grid-2" style="margin-top:14px">
       <div class="card">
         <div class="card-title">JD 对比<span class="line"></span>
-          ${r.jd ? `<button class="btn btn-quiet btn-sm" id="jd-rerun">重新对比</button>` : ''}
+          ${r.jd ? `<a class="btn btn-quiet btn-sm" href="/api/analyses/${r.id}/jd.md" download>下载</a><button class="btn btn-quiet btn-sm" id="jd-rerun">重新对比</button>` : ''}
         </div>
         ${r.jd ? jdView(r.jd) : `
           <p class="jd-hint">把目标职位的 JD 原文贴进来，AI 逐条对照简历：哪些要求扛得住、哪些是缺口、面试前 7 天优先补什么。</p>
@@ -1031,7 +1031,7 @@ function panelProfile() {
       </div>
       <div class="card">
         <div class="card-title">简历评审<span class="line"></span>
-          ${r.resumeReview ? `<button class="btn btn-quiet btn-sm" id="review-rerun">重新评审</button>` : ''}
+          ${r.resumeReview ? `<a class="btn btn-quiet btn-sm" href="/api/analyses/${r.id}/resume-review.md" download>下载</a><button class="btn btn-quiet btn-sm" id="review-rerun">重新评审</button>` : ''}
         </div>
         ${r.resumeReview ? reviewView(r.resumeReview) : `
           <p class="jd-hint">面试官视角逐行审你的简历：哪些表述一定会被追问、写法有什么硬伤、怎么改写成接得住追问的句子。</p>
@@ -2822,6 +2822,7 @@ function mockReportView(session) {
           <div class="mr-verdict">${esc(report.verdict || '')}</div>
           <div class="mr-sub">面试官视角评分，宁低勿高——低分是提醒，不是否定</div>
         </div>
+        <a class="btn btn-quiet btn-sm" style="margin-left:auto" href="/api/analyses/${state.record.id}/mocks/${session.id}.md" download>下载复盘</a>
       </div>
       ${(report.dimensions || []).length ? `<div class="jd-sec"><b>分维度</b>
         ${report.dimensions.map((d) => `<div class="mr-dim">

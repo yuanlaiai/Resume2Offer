@@ -474,3 +474,138 @@ export function courseMarkdown(course, record) {
   }
   return lines.join('\n');
 }
+
+/* ================= 模拟面试 / JD 对比 / 简历评审 ================= */
+
+/** 一场模拟面试（对话 + 评分 + 逐题参考答案）→ Markdown */
+export function mockMarkdown(session, record) {
+  const lines = [];
+  const push = (...xs) => lines.push(...xs);
+  const name = record?.profile?.candidate?.name || '候选人';
+  const rep = session.report || {};
+
+  push(`# ${name} · 模拟面试复盘（${session.mode === 'pressure' ? '压力面' : '标准'}）`, '');
+  push(`- 时间：${session.createdAt ? new Date(session.createdAt).toLocaleString('zh-CN') : '—'}`);
+  if (rep.overall != null) push(`- 总分：**${rep.overall}/100**　${nz(rep.verdict)}`);
+  push('', '> 面试官视角评分，宁低勿高——低分是提醒，不是否定。', '');
+
+  if (rep.dimensions?.length) {
+    push('## 分维度评分', '', '| 维度 | 得分 | 点评 |', '| --- | --- | --- |');
+    rep.dimensions.forEach((d) => push(`| ${nz(d.name)} | ${d.score} | ${nz(d.comment)} |`));
+    push('');
+  }
+  if (rep.highlights?.length) {
+    push('## 加分回答', '');
+    rep.highlights.forEach((x) => push(`- ${x}`));
+    push('');
+  }
+  if (rep.misses?.length) {
+    push('## 没接住的追问', '');
+    rep.misses.forEach((x) => push(`- ${x}`));
+    push('');
+  }
+  if (rep.practice?.length) {
+    push('## 接下来 7 天练什么', '');
+    rep.practice.forEach((x) => push(`- [ ] ${x}`));
+    push('');
+  }
+
+  if (session.answers?.length) {
+    push('## 逐题参考答案', '');
+    session.answers.forEach((a) => {
+      push(`### 第 ${a.no} 题：${nz(a.question)}`, '');
+      if (a.intent) push(`**为什么问这题**：${a.intent}`, '');
+      if (a.verdict) push(`**现场点评**：${a.verdict}`, '');
+      if (a.reference) push('**参考答案**', '', a.reference, '');
+      if (a.followups?.length) {
+        push('**可能的连环追问**', '');
+        a.followups.forEach((f) => push(`- ${f}`));
+        push('');
+      }
+      push('---', '');
+    });
+  }
+
+  push('## 完整对话记录', '');
+  (session.transcript || []).forEach((m) => {
+    push(`**${m.role === 'candidate' ? '我' : '面试官'}**${m.probe ? `（追问点：${m.probe}）` : ''}：`, '', m.content, '');
+  });
+  push('---', '', '_由 Resume2Offer 生成 · 参考答案供复盘，请结合真实经历消化_');
+  return lines.join('\n');
+}
+
+/** JD 对比 → Markdown */
+export function jdMarkdown(jd, record) {
+  const lines = [];
+  const push = (...xs) => lines.push(...xs);
+  const name = record?.profile?.candidate?.name || '候选人';
+
+  push(`# ${name} · JD 对比分析`, '');
+  push(`- 时间：${jd.createdAt ? new Date(jd.createdAt).toLocaleString('zh-CN') : '—'}`);
+  push(`- 匹配分：**${jd.fitScore ?? '—'}/100**`, '');
+  if (jd.headline) push(`> ${jd.headline}`, '');
+
+  if (jd.matches?.length) {
+    push('## 扛得住的', '', '| JD 要求 | 简历依据 | 强度 |', '| --- | --- | --- |');
+    jd.matches.forEach((m) => push(`| ${nz(m.jd)} | ${nz(m.evidence)} | ${nz(m.strength)} |`));
+    push('');
+  }
+  if (jd.gaps?.length) {
+    push('## 缺口', '');
+    jd.gaps.forEach((g, i) => {
+      push(`${i + 1}. **${nz(g.jd)}**（${nz(g.severity)}）`);
+      if (g.why) push(`   - ${g.why}`);
+    });
+    push('');
+  }
+  if (jd.actions?.length) {
+    push('## 面试前优先做', '');
+    jd.actions.forEach((a) => push(`- [ ] ${a}`));
+    push('');
+  }
+  if (jd.talking?.length) {
+    push('## 把缺口说成故事', '');
+    jd.talking.forEach((t) => push(`- ${t}`));
+    push('');
+  }
+  push('---', '', '_由 Resume2Offer 生成_');
+  return lines.join('\n');
+}
+
+/** 简历评审（面试官视角）→ Markdown */
+export function reviewMarkdown(rv, record) {
+  const lines = [];
+  const push = (...xs) => lines.push(...xs);
+  const name = record?.profile?.candidate?.name || '候选人';
+
+  push(`# ${name} · 简历评审（面试官视角）`, '');
+  if (rv.createdAt) push(`- 时间：${new Date(rv.createdAt).toLocaleString('zh-CN')}`);
+  if (rv.headline) push(`> ${rv.headline}`, '');
+
+  if (rv.grill?.length) {
+    push('## 一定会被追问', '');
+    rv.grill.forEach((g, i) => {
+      push(`${i + 1}. 原句：_${g.quote}_`);
+      if (g.question) push(`   - 追问：${g.question}`);
+      if (g.risk) push(`   - 接不住的后果：${g.risk}`);
+      if (g.prepare) push(`   - 准备：${g.prepare}`);
+    });
+    push('');
+  }
+  if (rv.rewrite?.length) {
+    push('## 改写建议', '');
+    rv.rewrite.forEach((r) => {
+      push(`- 原：_${r.before}_`);
+      push(`  - 改：${r.after}`);
+      if (r.why) push(`  - 逻辑：${r.why}`);
+    });
+    push('');
+  }
+  if (rv.cut?.length) {
+    push('## 建议删掉或弱化', '');
+    rv.cut.forEach((x) => push(`- ${x}`));
+    push('');
+  }
+  push('---', '', '_由 Resume2Offer 生成 · 改写句子里的数字请替换为你的真实数据_');
+  return lines.join('\n');
+}

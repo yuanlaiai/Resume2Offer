@@ -11,7 +11,7 @@ import { fixFileName } from './filename.js';
 import { describeLLM, LLMError } from './llm.js';
 import { runAnalyze, runMaterials, runQuiz, runGrade, runPlan, runExpand, runReport, runCourses, runLessons, runChat, prefillRole, runFlashcards, reviewCard, runQuickCard, runFeynman, dailyPlan, runMockStart, runMockTurn, runMockFinish, runJd, runResumeReview, setChapterProgress } from './pipeline.js';
 import { usageSummary } from './usage.js';
-import { toMarkdown, materialMarkdown, reportMarkdown, courseMarkdown, lessonMarkdown } from './export.js';
+import { toMarkdown, materialMarkdown, reportMarkdown, courseMarkdown, lessonMarkdown, mockMarkdown, jdMarkdown, reviewMarkdown } from './export.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -446,6 +446,30 @@ app.get('/api/analyses/:id/report.md', (req, res) => {
   const record = store.get(req.params.id);
   if (!record?.report) return res.status(404).json({ error: '报告还没生成' });
   sendMd(res, reportMarkdown(record.report, record), `${record.profile?.candidate?.name || '候选人'}-面试准备报告.md`);
+});
+
+/** 单场模拟面试复盘下载（对话 + 评分 + 逐题参考答案） */
+app.get('/api/analyses/:id/mocks/:sessionId.md', (req, res) => {
+  const record = store.get(req.params.id);
+  if (!record) return res.status(404).json({ error: '记录不存在' });
+  const session = (record.mocks || []).find((m) => m.id === req.params.sessionId);
+  if (!session) return res.status(404).json({ error: '这场面试不存在' });
+  if (!session.report) return res.status(400).json({ error: '这场面试还没有评分报告，先结束出报告' });
+  sendMd(res, mockMarkdown(session, record), `模拟面试复盘-${new Date(session.createdAt).toISOString().slice(0, 10)}.md`);
+});
+
+/** JD 对比下载 */
+app.get('/api/analyses/:id/jd.md', (req, res) => {
+  const record = store.get(req.params.id);
+  if (!record?.jd) return res.status(404).json({ error: 'JD 对比还没生成' });
+  sendMd(res, jdMarkdown(record.jd, record), `${record.profile?.candidate?.name || '候选人'}-JD对比.md`);
+});
+
+/** 简历评审下载 */
+app.get('/api/analyses/:id/resume-review.md', (req, res) => {
+  const record = store.get(req.params.id);
+  if (!record?.resumeReview) return res.status(404).json({ error: '简历评审还没生成' });
+  sendMd(res, reviewMarkdown(record.resumeReview, record), `${record.profile?.candidate?.name || '候选人'}-简历评审.md`);
 });
 
 /** 整门课程下载（含已生成讲义） */
