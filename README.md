@@ -6,6 +6,8 @@
 
 [English](README.en.md) | 中文
 
+**👉 [在线演示（无需 API Key，内置样例数据）](https://resume2offer-demo.app.workbuddy.host/?sharecode=DPUZJPMNW4)**
+
 简历驱动的 AI 面试复习教练 · 上传简历 → 拆出你真正会被问到的知识点 → 每类技术一门从入门到精通的系统课 → 生成面试官视角的复习资料 → 出题测验 → 打分复盘 → 排出 7 天冲刺计划
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)

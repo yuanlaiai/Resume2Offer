@@ -2,6 +2,9 @@
 
 # Resume2Offer
 
+
+
+**👉 [Live Demo (no API key needed, sample data built in)](https://resume2offer-demo.app.workbuddy.host/?sharecode=DPUZJPMNW4)**
 **The answers were in your resume all along.**
 
 Resume-driven AI interview coach — upload your resume → get the questions *you* will actually be asked → a full course per technology → interviewer-style study material → graded quizzes → a 7-day sprint plan.
