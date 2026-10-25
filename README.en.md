@@ -37,7 +37,24 @@ cp .env.example .env    # set LLM_API_KEY (any OpenAI-compatible API works)
 npm start               # → http://localhost:8787
 ```
 
-No key? `npm run demo` runs the whole flow on built-in sample data.
+No key? `npm run demo` runs the whole flow on built-in sample data. The demo mode is **read-only and privacy-safe**: whatever visitors upload is never parsed or stored — everything is answered with a built-in, desensitized sample (fictional persona), nothing is written to disk, and deleting records is blocked.
+
+## Tech stack
+
+Deliberately light: **5 runtime dependencies, zero build step**.
+
+| Layer | Choice | Notes |
+|---|---|---|
+| Runtime | Node.js ≥ 20 (pure ESM) | No TypeScript, no transpile |
+| Backend | Express 4 + multer | Plain middleware, no framework magic |
+| Resume parsing | pdf-parse + mammoth | Local PDF/DOCX text extraction |
+| Frontend | Vanilla JS / CSS / SVG | SPA, no framework, no bundler, zero frontend deps |
+| Storage | Single JSON file (`data/db.json`) | Atomic writes, throttled pre-write backups, self-healing on boot |
+| LLM | Any OpenAI-compatible API | OpenAI / DeepSeek / Moonshot / Qwen / GLM / local Ollama |
+| Web search (optional) | Tavily / Bocha / Brave / Serper / SearXNG / custom | Pluggable adapters, normalized results, graceful degradation |
+| Voice input (optional) | Browser Web Speech API | Pure frontend, no third-party service |
+| Test & CI | Self-contained test scripts + GitHub Actions | Offline suites + demo-mode end-to-end on Node 20 / 22 |
+| Deploy | Docker / docker compose | HEALTHCHECK built in, data volume mount |
 
 ## Highlights
 
