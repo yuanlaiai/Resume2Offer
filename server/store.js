@@ -39,6 +39,7 @@ async function backup() {
 }
 
 function load() {
+  if (config.demo) return; // 演示模式：不读盘，全程内存态，重启即恢复出厂样例
   try {
     fs.mkdirSync(config.dataDir, { recursive: true });
     if (fs.existsSync(DB_FILE)) {
@@ -66,6 +67,8 @@ if (healed) {
 }
 
 function persist() {
+  // 演示模式：不落盘、不备份，访客数据只存活在本次进程内存里
+  if (config.demo) return Promise.resolve();
   // 串行化写入，先写临时文件再 rename，避免半截文件；写入前做一次节流备份
   queue = queue.then(async () => {
     try {

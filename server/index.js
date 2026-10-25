@@ -71,14 +71,25 @@ app.get('/api/analyses/:id', (req, res) => {
 });
 
 app.delete('/api/analyses/:id', async (req, res) => {
+  if (config.demo) return res.status(403).json({ error: '演示模式为只读演示，不支持删除记录' });
   const ok = await store.remove(req.params.id);
   res.status(ok ? 200 : 404).json({ ok });
 });
 
 /* ---------------- 0. 上传即预判岗位（自动填充） ---------------- */
 
+/** 演示模式统一使用的内置脱敏样例简历 */
+function demoResumeText() {
+  const file = path.join(ROOT, 'samples', 'sample-resume.md');
+  return fs.readFileSync(file, 'utf8');
+}
+
 app.post('/api/prefill', upload.single('resume'), async (req, res, next) => {
   try {
+    if (config.demo) {
+      // 演示模式：不解析上传内容，一律用内置脱敏样例，避免访客真实简历被读取或存储
+      return res.json(await prefillRole({ resumeText: demoResumeText() }));
+    }
     let resumeText = '';
     if (req.file) {
       const parsed = await extractResume({
@@ -111,7 +122,11 @@ app.post('/api/analyze', upload.single('resume'), async (req, res, next) => {
 
     let resumeText = '';
     let fileName = '';
-    if (req.file) {
+    if (config.demo) {
+      // 演示模式：无论上传什么，一律按内置脱敏样例处理，不解析、不存储真实简历
+      resumeText = demoResumeText();
+      fileName = '演示样例-林一.md';
+    } else if (req.file) {
       const parsed = await extractResume({
         buffer: req.file.buffer,
         filename: fixFileName(req.file.originalname),
