@@ -37,11 +37,6 @@ let done = 0;
 let failed = 0;
 const PAR = 3;
 while (queue.length) {
-  const workers = Array.from({ length: PAR }, async (_, wi) => {
-    const item = chunk(queue, 4)[0];
-    if (!item) return;
-    // chunk 已 splice，直接取本 worker 的组
-  });
   // 串行化取块：每 worker 取一组
   const groups = [];
   for (let i = 0; i < PAR && queue.length; i += 1) groups.push(queue.splice(0, 4));
