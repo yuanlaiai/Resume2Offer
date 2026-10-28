@@ -23,8 +23,6 @@ const state = {
   prefillBusy: false,
   prefillQueued: false,
   roleTouched: false,
-  autoStart: localStorage.getItem('if-autostart') !== '0',
-  autoTimer: null,
   reportDepth: localStorage.getItem('if-depth') || 'standard',
   historyOpen: false,
   courseId: null,
@@ -338,10 +336,6 @@ function renderHome() {
 
         <div class="upload-actions">
           <button class="btn btn-brand btn-lg btn-block" id="submit-btn" type="submit">生成知识点与复习方案</button>
-          <label class="auto-start">
-            <input type="checkbox" id="auto-start" ${state.autoStart ? 'checked' : ''} />
-            <span>上传后自动开始分析（识别完岗位就拆简历）</span>
-          </label>
           <button class="btn btn-quiet btn-sm" type="button" id="sample-btn">没有简历？用示例简历试一下</button>
         </div>
         <div class="upload-foot">${notReady ? '⚠️ 服务端未配置 LLM_API_KEY，请参考 README 配置后重启，或用 npm run demo 启动' : '分析通常需要 20~40 秒，建议在电脑上操作'}</div>
@@ -421,23 +415,11 @@ function bindHome() {
 
   document.getElementById('upload-form').addEventListener('submit', submitAnalyze);
 
-  const auto = document.getElementById('auto-start');
-  if (auto) {
-    auto.checked = state.autoStart;
-    auto.addEventListener('change', () => {
-      state.autoStart = auto.checked;
-      localStorage.setItem('if-autostart', auto.checked ? '1' : '0');
-      if (!auto.checked) cancelAutoAnalyze();
-      else if (state.prefill) scheduleAutoAnalyze();
-    });
-  }
-
   const roleInput = document.getElementById('role');
   if (roleInput) {
     // 用户手动改过岗位，就不再被自动识别覆盖
     roleInput.addEventListener('input', () => {
       state.roleTouched = true;
-      cancelAutoAnalyze();
     });
   }
 }
@@ -472,7 +454,6 @@ function setFile(file) {
   state.file = file;
   state.prefill = null;
   state.roleTouched = false;
-  cancelAutoAnalyze();
   const chip = document.getElementById('file-chip');
   if (chip) {
     chip.innerHTML = `<div class="file-chip">
@@ -533,7 +514,7 @@ async function requestPrefill({ auto = true } = {}) {
     const data = await res.json();
     state.prefill = data;
     applyPrefill(data);
-    if (auto && state.autoStart) scheduleAutoAnalyze();
+    if (auto) showPrefillReady();
   } catch (err) {
     const msg = err.name === 'AbortError' ? '识别超时' : err.message;
     setPrefillHint(`${msg}，可手动填写岗位`, 'warn');
@@ -600,44 +581,13 @@ function applyPrefill(data) {
   });
 }
 
-/** 识别完成后倒计时自动开始分析（3 秒内可取消） */
-function scheduleAutoAnalyze() {
-  if (state.autoTimer || state.submitting) return;
-  if (!state.autoStart || !state.prefill) return;
-  const form = document.getElementById('upload-form');
-  if (!form) return;
-
-  let left = 3;
-  const paint = () => {
-    const hint = document.getElementById('prefill-hint');
-    if (!hint) return;
-    hint.className = 'label-hint ok';
-    hint.innerHTML = `✓ 已识别，${left} 秒后自动拆简历 <button type="button" class="hint-cancel" id="cancel-auto">取消</button>`;
-    document.getElementById('cancel-auto')?.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      cancelAutoAnalyze();
-      setPrefillHint('已取消自动开始，点下方按钮开始', 'ok');
-    });
-  };
-  paint();
-
-  state.autoTimer = setInterval(() => {
-    left -= 1;
-    if (left > 0) {
-      paint();
-      return;
-    }
-    cancelAutoAnalyze();
-    if (!state.submitting) form.requestSubmit();
-  }, 1000);
-}
-
-function cancelAutoAnalyze() {
-  if (state.autoTimer) {
-    clearInterval(state.autoTimer);
-    state.autoTimer = null;
-  }
+/** 识别完成后只提示就绪，不再自动开始——由用户点「生成知识点与复习方案」触发 */
+function showPrefillReady() {
+  if (state.submitting) return;
+  const hint = document.getElementById('prefill-hint');
+  if (!hint) return;
+  hint.className = 'label-hint ok';
+  hint.textContent = '✓ 已识别岗位，确认无误后点下方按钮生成知识点';
 }
 
 /** 提交前等一等还没回来的识别结果，避免「岗位空着就分析」 */
@@ -656,8 +606,6 @@ async function submitAnalyze(e) {
     toast('服务端还没有配置 LLM_API_KEY，请先配置或用 npm run demo 启动', 'err');
     return;
   }
-
-  cancelAutoAnalyze();
 
   state.submitting = true;
   const btn = document.getElementById('submit-btn');

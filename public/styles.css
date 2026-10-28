@@ -219,12 +219,6 @@ h1.hero-title em {
 }
 .mode-switch button.on { background: #fff; color: var(--text); box-shadow: 0 1px 3px rgba(10, 31, 28, 0.1); }
 .upload-actions { margin-top: 16px; display: grid; gap: 8px; }
-.auto-start {
-  display: flex; align-items: center; gap: 7px; justify-content: center;
-  font-size: 12px; color: var(--text-2); cursor: pointer; user-select: none;
-  padding: 2px 0;
-}
-.auto-start input { width: 14px; height: 14px; accent-color: var(--brand); cursor: pointer; }
 .upload-foot { margin-top: 12px; font-size: 11.5px; color: var(--muted); text-align: center; line-height: 1.6; }
 
 /* 流程条 */
