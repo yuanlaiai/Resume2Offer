@@ -1,6 +1,7 @@
 import { config } from './config.js';
 import { mockChat } from './mock.js';
 import { recordUsage } from './usage.js';
+import { currentSignal, CancelledError, throwIfCancelled, isCancelled } from './job-context.js';
 
 /**
  * OpenAI 兼容的 Chat Completions 客户端。
@@ -24,6 +25,13 @@ function endpoint() {
 /** max_tokens 的上限：推理模型会用大量 token 思考，需要留足空间 */
 const TOKEN_CEILING = 64000;
 
+/** 合并多个中止信号；旧版 Node 没有 AbortSignal.any 时退化为主信号 */
+function combineSignals(primary, extra) {
+  if (!extra) return primary;
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any([primary, extra]);
+  return extra;
+}
+
 /**
  * 发一次请求，返回正文与元信息。
  * 注意：推理类模型（deepseek-flash / o 系列等）会把 token 花在 reasoning_content 上，
@@ -46,7 +54,8 @@ async function requestOnce(messages, opts, maxTokens) {
       Authorization: `Bearer ${config.llm.apiKey}`,
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(config.llm.timeoutMs),
+    // 超时与「用户取消」两个信号合并：任一触发都会立刻中断请求
+    signal: combineSignals(AbortSignal.timeout(config.llm.timeoutMs), opts.signal || currentSignal()),
   });
 
   if (!res.ok) {
@@ -77,6 +86,8 @@ async function requestOnce(messages, opts, maxTokens) {
 
 /** 调用模型，返回文本；内部自动处理网络重试与截断升配 */
 export async function chatDetailed(messages, opts = {}) {
+  throwIfCancelled();
+  const signal = opts.signal || currentSignal();
   if (config.demo) {
     return { content: mockChat(messages, opts), finishReason: 'stop', maxTokens: 0, reasoningChars: 0 };
   }
@@ -118,6 +129,8 @@ export async function chatDetailed(messages, opts = {}) {
       if (out.usage) recordUsage(out.usage, config.llm.model);
       return out;
     } catch (err) {
+      // 用户主动取消：不重试，直接把取消信号向上抛
+      if (isCancelled(err) || signal?.aborted) throw new CancelledError();
       const retryable = err instanceof LLMError ? err.retryable || err.name === 'TimeoutError' : true;
       if (err instanceof LLMError && err.code === 'EMPTY') throw err;
       if (err instanceof LLMError && err.status && err.status < 500 && err.status !== 429) throw err;
@@ -244,6 +257,7 @@ function looksIncomplete(text) {
  * 要求模型返回 JSON：解析失败时先补足 token 重试，再让模型自己修一次。
  */
 export async function chatJSON(messages, opts = {}) {
+  throwIfCancelled();
   let maxTokens = Math.max(256, opts.maxTokens ?? config.llm.maxTokens);
   const first = await chatDetailed(messages, { ...opts, maxTokens });
   const parsed = extractJSON(first.content);

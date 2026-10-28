@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { config, llmReady, ROOT } from './config.js';
 import { store } from './store.js';
-import { startJob, getJob } from './jobs.js';
+import { startJob, getJob, cancelJob } from './jobs.js';
 import { extractResume, normalizeText } from './extract.js';
 import { fixFileName } from './filename.js';
 import { describeLLM, LLMError } from './llm.js';
@@ -398,6 +398,15 @@ app.get('/api/jobs/:id', (req, res) => {
   const job = getJob(req.params.id);
   if (!job) return res.status(404).json({ error: '任务不存在或已过期' });
   res.json(job);
+});
+
+/** 取消进行中的任务：中断正在跑的模型请求，后续步骤不再执行 */
+app.post('/api/jobs/:id/cancel', (req, res) => {
+  const ok = cancelJob(req.params.id);
+  if (!ok && !getJob(req.params.id)) {
+    return res.status(404).json({ error: '任务不存在或已结束' });
+  }
+  res.json({ ok: true, job: getJob(req.params.id) });
 });
 
 /* ---------------- AI 随问（划词追问，直接响应不进队列） ---------------- */

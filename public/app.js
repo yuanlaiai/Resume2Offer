@@ -30,6 +30,7 @@ const state = {
   lessonDepth: localStorage.getItem('if-depth') || 'standard',
   lessonVersion: 0,
   lessonHistOpen: false,
+  activeJobId: null,
 };
 
 const DEPTH_LABEL = { lite: '简单', standard: '中等', deep: '深度' };
@@ -157,6 +158,34 @@ const on = (sel, ev, fn) => document.querySelectorAll(sel).forEach((el) => el.ad
 
 /* ---------------- 任务进度浮层 ---------------- */
 
+/** 进行中的任务记在本地：刷新页面后能接着显示进度，也能拦住重复提交 */
+const ACTIVE_JOB_KEY = 'r2o-active-job';
+
+function readActiveJob() {
+  try {
+    const v = JSON.parse(localStorage.getItem(ACTIVE_JOB_KEY) || 'null');
+    return v && v.jobId ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveActiveJob(info) {
+  try {
+    localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(info));
+  } catch {
+    /* 隐私模式下写不进去不影响主流程 */
+  }
+}
+
+function clearActiveJob() {
+  try {
+    localStorage.removeItem(ACTIVE_JOB_KEY);
+  } catch {
+    /* 忽略 */
+  }
+}
+
 function showOverlay(title, steps = []) {
   const el = document.createElement('div');
   el.className = 'overlay';
@@ -169,9 +198,35 @@ function showOverlay(title, steps = []) {
         ${steps.map((s) => `<div class="job-step"><span class="ic"></span><span>${esc(s)}</span></div>`).join('')}
       </div>
       <div class="job-bar"><i id="job-bar" style="width:4%"></i></div>
+      <div class="job-act">
+        <button class="btn btn-ghost btn-sm" type="button" id="job-cancel">取消生成</button>
+        <span class="job-hint">取消只停止后续生成，已经写好的内容会保留</span>
+      </div>
       <div id="job-err"></div>
     </div>`;
   document.body.appendChild(el);
+  el.querySelector('#job-cancel')?.addEventListener('click', requestCancel);
+}
+
+/** 请求服务端取消当前任务 */
+async function requestCancel() {
+  const id = state.activeJobId;
+  const btn = document.getElementById('job-cancel');
+  if (!id) {
+    hideOverlay();
+    return;
+  }
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '正在停止…';
+  }
+  // 再点一次就强制关掉浮层（服务端任务若已结束，这里也兜住）
+  if (btn) btn.addEventListener('click', hideOverlay, { once: true });
+  try {
+    await api(`/api/jobs/${id}/cancel`, { method: 'POST' });
+  } catch {
+    /* 任务可能刚好已结束，交给轮询处理 */
+  }
 }
 
 function updateOverlay(job) {
@@ -208,14 +263,25 @@ function hideOverlay() {
 
 function pollJob(jobId) {
   return new Promise((resolve, reject) => {
+    let stopped = false;
     const step = async () => {
+      if (stopped) return;
       try {
         const job = await api(`/api/jobs/${jobId}`);
-        updateOverlay(job);
         if (job.status === 'done') return resolve(job.result);
+        if (job.status === 'cancelled') {
+          const e = new Error(job.error || '已取消生成');
+          e.cancelled = true;
+          return reject(e);
+        }
         if (job.status === 'error') return reject(new Error(job.error || '处理失败'));
+        updateOverlay(job);
         setTimeout(step, 750);
       } catch (err) {
+        // 服务重启后内存里的任务会消失，给个能看懂的提示，别一直转
+        if (/任务不存在|已过期/.test(err.message || '')) {
+          err.message = '任务已失效（服务可能重启过），请重新发起';
+        }
         reject(err);
       }
     };
@@ -223,17 +289,99 @@ function pollJob(jobId) {
   });
 }
 
-async function runJob(reqPromise, title, steps) {
+/** 已有任务在跑时，不允许再开新任务（防止重复扣费） */
+function guardActiveJob() {
+  const saved = readActiveJob();
+  if (!saved) return;
+  const stale = Date.now() - (saved.at || 0) > 30 * 60 * 1000;
+  if (stale || saved.jobId === state.activeJobId) {
+    clearActiveJob();
+    return;
+  }
+  toast('上一个任务还在后台生成，等它结束或先点取消', 'err');
+  const err = new Error('已有任务在进行中');
+  err.blocked = true;
+  throw err;
+}
+
+async function runJob(reqPromise, title, steps = []) {
+  guardActiveJob();
   showOverlay(title, steps);
   try {
     const { jobId } = await reqPromise;
+    state.activeJobId = jobId;
+    saveActiveJob({ jobId, title, steps, at: Date.now() });
     const result = await pollJob(jobId);
     hideOverlay();
     return result;
   } catch (err) {
-    overlayError(err.message);
+    if (err.cancelled) {
+      hideOverlay();
+      toast('已停止生成，已生成的部分会保留');
+    } else if (!err.blocked) {
+      overlayError(err.message);
+    }
     throw err;
+  } finally {
+    state.activeJobId = null;
+    clearActiveJob();
   }
+}
+
+/**
+ * 刷新/重开后接着上一次任务：还在跑就恢复进度浮层，
+ * 已经跑完就直接把结果打开。
+ */
+async function resumeActiveJob() {
+  const saved = readActiveJob();
+  if (!saved) return;
+
+  let job;
+  try {
+    job = await api(`/api/jobs/${saved.jobId}`);
+  } catch {
+    clearActiveJob();
+    return;
+  }
+  if (!job || job.status === 'error' || job.status === 'cancelled') {
+    clearActiveJob();
+    return;
+  }
+  if (job.status === 'done') {
+    clearActiveJob();
+    openResumedResult(job.result);
+    return;
+  }
+
+  state.activeJobId = saved.jobId;
+  showOverlay(saved.title || '正在生成', saved.steps || []);
+  updateOverlay(job);
+  try {
+    const result = await pollJob(saved.jobId);
+    hideOverlay();
+    openResumedResult(result);
+  } catch (err) {
+    hideOverlay();
+    if (!err.cancelled) toast(err.message || '任务中断', 'err');
+  } finally {
+    state.activeJobId = null;
+    clearActiveJob();
+  }
+}
+
+/** 上次的任务跑完了：能定位到分析记录就直接跳过去，否则刷新当前页拿最新数据 */
+function openResumedResult(result) {
+  if (result && result.analysisId) {
+    // 本来就在这份简历里（比如在课程页等讲义）：原地刷新，保住当前 Tab
+    if ((location.hash || '').startsWith(`#/a/${result.analysisId}`)) {
+      location.reload();
+      return;
+    }
+    toast('上次的生成已完成');
+    location.hash = `#/a/${result.analysisId}`;
+    return;
+  }
+  location.reload();
 }
 
 /* ---------------- 顶部 ---------------- */
@@ -3052,6 +3200,8 @@ async function boot() {
   }
   renderTopbar();
   route();
+  // 刷新后接着上次没跑完的任务，避免用户以为白跑了
+  resumeActiveJob().catch(() => {});
 }
 
 function route() {

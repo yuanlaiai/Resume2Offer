@@ -1,5 +1,6 @@
 import { store } from './store.js';
 import { chatJSON, chat } from './llm.js';
+import { isCancelled } from './job-context.js';
 import { searchWeb, formatSearchBlock, searchReady } from './search.js';
 import {
   parseResumePrompt,
@@ -257,6 +258,7 @@ async function ensureCoverage(ctx, { profile, groups, targetRole, level }) {
       );
       merged = mergeGroups(merged, normalizeGroups(raw, nextTopicNo(merged)));
     } catch (err) {
+      if (isCancelled(err)) throw err;
       console.error('[coverage] 定向补齐失败：', err.message);
     }
     missing = missingStacks(profile.stack, merged);
@@ -395,6 +397,7 @@ export async function runMaterials(ctx, { analysisId, topicIds, depth = 'standar
         history: prev ? [snapshot(prev), ...(prev.history || [])].slice(0, 4) : [],
       });
     } catch (err) {
+      if (isCancelled(err)) throw err;
       console.error(`[materials] ${topic.title} 失败：`, err.message);
       const prev = done.get(topic.id);
       done.set(topic.id, prev || {
@@ -700,6 +703,7 @@ export async function runCourses(ctx, { analysisId, names, auto = false }) {
       }
       results[i] = course;
     } catch (err) {
+      if (isCancelled(err)) throw err;
       console.error(`[courses] ${group.name} 排课失败：`, err.message);
       failed.push({ group: group.name, error: err.message });
     }
@@ -748,7 +752,8 @@ export async function runLessons(ctx, { analysisId, courseId, chapterIds, depth 
 
   let finished = 0;
   const failed = [];
-  await pool(targets, 2, async ({ stage, chapter }) => {
+  try {
+    await pool(targets, 2, async ({ stage, chapter }) => {
     try {
       let searchBlock = '';
       let sources = [];
@@ -780,13 +785,19 @@ export async function runLessons(ctx, { analysisId, courseId, chapterIds, depth 
       chapter.lesson = normalizeLesson(raw, { depth: level, sources, prev: chapter.lesson });
       delete chapter.lessonError;
     } catch (err) {
+      if (isCancelled(err)) throw err;
       console.error(`[lessons] ${chapter.title} 失败：`, err.message);
       chapter.lessonError = err.message;
       failed.push({ chapterId: chapter.id, title: chapter.title, error: err.message });
     }
     finished += 1;
     ctx.tick(finished / targets.length, `已完成 ${finished}/${targets.length}：${chapter.title}`);
-  });
+    });
+  } catch (err) {
+    // 取消或中途出错也把已经写好的讲义存下来，用户不白等
+    await store.update(analysisId, { courses: record.courses });
+    throw err;
+  }
 
   await store.update(analysisId, { courses: record.courses });
   ctx.tick(1, '讲义已生成');
@@ -1572,7 +1583,8 @@ export async function runMockFinish(ctx, { analysisId, sessionId }) {
       }))
       .filter((a) => a.question || a.reference);
   } catch (err) {
-    // 参考答案生成失败不拖垮评分报告
+    // 参考答案生成失败不拖垮评分报告；但用户取消要如实中止
+    if (isCancelled(err)) throw err;
     console.error('[mock] 参考答案生成失败：', err.message);
     session.answers = [];
   }

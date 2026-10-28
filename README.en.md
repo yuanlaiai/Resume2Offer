@@ -25,6 +25,7 @@ Most "AI interview question banks" are generic: everyone drills the same 500 que
 - **Mock interview** — an AI interviewer that asks one question at a time, digs into vague answers, and ends with a strict scorecard
 - **Quiz → grade → plan** — graded attempts, per-question review, and a 7-day plan targeting your weak spots
 - **Quick study** — spaced-repetition flashcards, 5-minute cheat sheets, Feynman checks, and a daily queue
+- **Cancel anytime, survive a refresh** — long jobs run server-side, so reloading or closing the tab never kills them; the progress panel has a *Cancel* button that aborts the in-flight model call, and a reloaded page picks the same job back up automatically
 
 Works for any role: engineering, algorithms, product, ops, marketing — the interviewer adapts its style.
 

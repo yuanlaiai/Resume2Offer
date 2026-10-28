@@ -637,6 +637,11 @@ h1.hero-title em {
 @keyframes spin { to { transform: rotate(360deg); } }
 .job-bar { height: 5px; border-radius: 3px; background: #eef4f2; overflow: hidden; }
 .job-bar i { display: block; height: 100%; background: linear-gradient(90deg, #0f766e, #5eead4); transition: width 0.4s ease; }
+.job-act {
+  margin-top: 14px; display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap; justify-content: space-between;
+}
+.job-hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; flex: 1; min-width: 160px; }
 .job-err { margin-top: 14px; padding: 10px 12px; background: var(--danger-bg); border: 1px solid var(--danger-line); border-radius: 9px; font-size: 12.5px; color: var(--danger); line-height: 1.6; }
 
 /* ---------- toast ---------- */
